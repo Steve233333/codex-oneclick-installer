@@ -48,6 +48,12 @@ on run argv
   set thePrompt to item 1 of argv
   set theTitle to item 2 of argv
   set theDefault to item 3 of argv
+  set oldDelims to AppleScript's text item delimiters
+  set AppleScript's text item delimiters to "\\n"
+  set theParts to every text item of thePrompt
+  set AppleScript's text item delimiters to linefeed
+  set thePrompt to theParts as text
+  set AppleScript's text item delimiters to oldDelims
   try
     set theAnswer to text returned of (display dialog thePrompt with title theTitle default answer theDefault with hidden answer buttons {"取消", "继续"} default button "继续" cancel button "取消")
     return theAnswer
@@ -64,6 +70,12 @@ on run argv
   set thePrompt to item 1 of argv
   set theTitle to item 2 of argv
   set theDefault to item 3 of argv
+  set oldDelims to AppleScript's text item delimiters
+  set AppleScript's text item delimiters to "\\n"
+  set theParts to every text item of thePrompt
+  set AppleScript's text item delimiters to linefeed
+  set thePrompt to theParts as text
+  set AppleScript's text item delimiters to oldDelims
   try
     set theAnswer to text returned of (display dialog thePrompt with title theTitle default answer theDefault buttons {"取消", "继续"} default button "继续" cancel button "取消")
     return theAnswer
@@ -390,17 +402,7 @@ else
   PATCH_TEXT="失败，请查看 ~/.codex/picker-patch/patch.log"
 fi
 
-SUMMARY="安装完成 ✅
-
-可用模型：$MODEL_COUNT 个
-默认模型：$DEFAULT_MODEL
-看图：$VISION_TEXT
-双开副本：$PATCH_TEXT
-
-下一步：
-1. 如果副本已启动，先完全退出再重新打开 Codex（生效）。
-2. 可选：gh auth login -h github.com 登录 GitHub；git config --global user.name/email 设置身份。
-3. 日志：$LOG"
+SUMMARY=$'安装完成 ✅\n\n可用模型：'"$MODEL_COUNT"$' 个\n默认模型：'"$DEFAULT_MODEL"$'\n看图：'"$VISION_TEXT"$'\n双开副本：'"$PATCH_TEXT"$'\n\n下一步：\n1. 如果副本已启动，先完全退出再重新打开 Codex（生效）。\n2. 可选：gh auth login -h github.com 登录 GitHub；git config --global user.name/email 设置身份。\n3. 日志：'"$LOG"
 
 log "$SUMMARY"
 if [[ "$NONINTERACTIVE" -eq 0 ]]; then
