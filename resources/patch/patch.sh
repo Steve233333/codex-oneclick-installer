@@ -57,19 +57,26 @@ ensure_cert() {
     return 0
   fi
   if [ -z "$SIGN_KEYCHAIN_PASS" ]; then
-    log "ERROR: no signing keychain password available (set ~/.codex/picker-patch/.keychain-pass)"
-    return 1
+    log "WARN: no signing keychain password available; will fall back to ad-hoc signing"
+    return 0
   fi
   log "creating self-signed signing identity..."
   rm -f "$SIGN_KEYCHAIN" "$BASE/certs/codex-sign2.key" "$BASE/certs/codex-sign2.crt" "$BASE/certs/codex-sign2.p12"
   security create-keychain -p "$SIGN_KEYCHAIN_PASS" "$SIGN_KEYCHAIN" >> "$LOG" 2>&1
   security set-keychain-settings "$SIGN_KEYCHAIN" >> "$LOG" 2>&1 || true
+  security unlock-keychain -p "$SIGN_KEYCHAIN_PASS" "$SIGN_KEYCHAIN" >> "$LOG" 2>&1 || true
   openssl req -x509 -newkey rsa:2048 -keyout "$BASE/certs/codex-sign2.key" \
     -out "$BASE/certs/codex-sign2.crt" -days 3650 -nodes \
     -subj "/CN=$SIGN_IDENTITY/O=codex-oneclick" >> "$LOG" 2>&1
-  openssl pkcs12 -export -inkey "$BASE/certs/codex-sign2.key" \
-    -in "$BASE/certs/codex-sign2.crt" -out "$BASE/certs/codex-sign2.p12" \
-    -passout "pass:$SIGN_KEYCHAIN_PASS" >> "$LOG" 2>&1
+  if openssl pkcs12 -export -help 2>&1 | grep -q '\-legacy'; then
+    openssl pkcs12 -export -inkey "$BASE/certs/codex-sign2.key" \
+      -in "$BASE/certs/codex-sign2.crt" -out "$BASE/certs/codex-sign2.p12" \
+      -passout "pass:$SIGN_KEYCHAIN_PASS" -legacy >> "$LOG" 2>&1
+  else
+    openssl pkcs12 -export -inkey "$BASE/certs/codex-sign2.key" \
+      -in "$BASE/certs/codex-sign2.crt" -out "$BASE/certs/codex-sign2.p12" \
+      -passout "pass:$SIGN_KEYCHAIN_PASS" >> "$LOG" 2>&1
+  fi
   security import "$BASE/certs/codex-sign2.p12" -k "$SIGN_KEYCHAIN" \
     -P "$SIGN_KEYCHAIN_PASS" -T /usr/bin/codesign -T /usr/bin/security >> "$LOG" 2>&1
   security unlock-keychain -p "$SIGN_KEYCHAIN_PASS" "$SIGN_KEYCHAIN" >> "$LOG" 2>&1 || true
@@ -77,9 +84,9 @@ ensure_cert() {
   if security find-identity -p codesigning "$SIGN_KEYCHAIN" 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
     log "signing identity created"
   else
-    log "ERROR: signing identity creation failed"
-    return 1
+    log "WARN: signing identity not visible to find-identity; codesign will attempt cert, ad-hoc is the fallback"
   fi
+  return 0
 }
 
 is_patched() {
@@ -307,6 +314,7 @@ status() {
 
 case "${1:-}" in
   --install)   install ;;
+  --ensure-cert) ensure_cert ;;
   --auto-update) auto_update ;;
   --uninstall) uninstall ;;
   --status)    status ;;
