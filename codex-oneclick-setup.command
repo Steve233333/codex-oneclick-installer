@@ -119,7 +119,7 @@ if [[ "$NONINTERACTIVE" -eq 1 ]]; then
 else
   GO_KEY="$(ask_hidden "OpenCode Go / Zen 订阅 Key（必填其一）\n\n请粘贴你的 sk-... key。\n\n缺这个 key 的后果：所有 *-go 模型（deepseek-go / mimo / glm / luna / muse 等）不会安装，只能使用官方 DeepSeek。" "① OpenCode Go Key" "")"
   [[ "$GO_KEY" == "__CANCEL__" ]] && die "已取消安装"
-  DS_KEY="$(ask_hidden "DeepSeek 官方 API Key（可选）\n\n请粘贴 sk-... key。\n\n缺这个 key 的后果：官方 deepseek-v4-flash / deepseek-v4-pro 两个模型不会显示，默认模型会自动改走 Go 模型。" "② DeepSeek Key" "")"
+  DS_KEY="$(ask_hidden "DeepSeek 官方 API Key（可选）\n\n请粘贴 sk-... key。\n\n缺这个 key 的后果：官方 deepseek-v4-flash-vision-exp / deepseek-v4-pro 两个模型不会显示，默认模型会自动改走 Go 模型。" "② DeepSeek Key" "")"
   [[ "$DS_KEY" == "__CANCEL__" ]] && die "已取消安装"
   GLM_KEY="$(ask_hidden "智谱 GLM 视觉 Key（可选）\n\n请粘贴 open.bigmodel.cn 的 key（格式类似 1234.xxxx）。\n\n缺这个 key 的后果：Codex 文本对话不受影响，但发图片会失败；之后可随时补填到 ~/.config/agent-vision-toolkit/env。" "③ 智谱 GLM 视觉 Key" "")"
   [[ "$GLM_KEY" == "__CANCEL__" ]] && die "已取消安装"
@@ -225,7 +225,7 @@ log "models.json 已生成：$MODEL_COUNT 个模型"
 # ---------------------------------------------------------------------------
 DEFAULT_MODEL=""
 if [[ "$HAS_DS" -eq 1 ]]; then
-  DEFAULT_MODEL="deepseek-v4-flash"
+  DEFAULT_MODEL="deepseek-v4-flash-vision-exp"
 elif [[ "$AVAIL_SLUGS" == *"mimo-v2.5-go"* ]]; then
   DEFAULT_MODEL="mimo-v2.5-go"
 elif [[ "$AVAIL_SLUGS" == *"deepseek-v4-flash-go"* ]]; then
@@ -237,10 +237,10 @@ fi
 EXTRACT_MODEL=""
 if [[ "$AVAIL_SLUGS" == *"mimo-v2.5-go"* ]]; then
   EXTRACT_MODEL="mimo-v2.5-go"
-elif [[ "$AVAIL_SLUGS" == *"deepseek-v4-flash-go"* ]]; then
-  EXTRACT_MODEL="deepseek-v4-flash-go"
-elif [[ "$AVAIL_SLUGS" == *"deepseek-v4-flash"* ]]; then
-  EXTRACT_MODEL="deepseek-v4-flash"
+elif [[ "$AVAIL_SLUGS" == *"deepseek-v4-flash-vision-exp-go"* ]]; then
+  EXTRACT_MODEL="deepseek-v4-flash-vision-exp-go"
+elif [[ "$AVAIL_SLUGS" == *"deepseek-v4-flash-vision-exp"* ]]; then
+  EXTRACT_MODEL="deepseek-v4-flash-vision-exp"
 else
   EXTRACT_MODEL="${AVAIL_SLUGS%% *}"
 fi

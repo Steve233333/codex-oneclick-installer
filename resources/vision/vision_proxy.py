@@ -32,6 +32,12 @@ ZEN_UPSTREAM = "https://opencode.ai/zen"
 GO_SUFFIX = "-go"
 GO_UPSTREAM = "https://opencode.ai/zen/go"
 
+# Models that have native vision support and should NOT go through GLM image rewriting.
+NATIVE_VISION_MODELS = frozenset({
+    "deepseek-v4-flash-vision-exp",
+    "deepseek-v4-flash-vision-exp-go",
+})
+
 
 def _rewrite_zen_model(parsed):
     """Strip the trailing "-zen" suffix for Zen free models. Returns True if the
@@ -1327,7 +1333,12 @@ class Proxy:
                 except json.JSONDecodeError:
                     pass
             if isinstance(parsed, dict):
-                image_changed = await _rewrite_image_inputs(parsed)
+                _native_vision = isinstance(parsed.get("model"), str) and parsed.get("model") in NATIVE_VISION_MODELS
+                if _native_vision:
+                    image_changed = False
+                    _log(f"[vision-proxy] native vision passthrough model={parsed.get('model')} skip image rewrite")
+                else:
+                    image_changed = await _rewrite_image_inputs(parsed)
                 model_changed = _rewrite_model_compat(parsed)
                 zen_changed = _rewrite_zen_model(parsed)
                 go_changed = _rewrite_go_model(parsed)
