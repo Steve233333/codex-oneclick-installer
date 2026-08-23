@@ -188,6 +188,78 @@ def _normalize_web_search_call(parsed):
     return changed
 
 
+def _repair_json_object_args(s):
+    """Repair tool-call arguments mangled by chat->responses adapters.
+
+    2026-08-23: the Go gateway's streaming adapter for ox-alpha-free / glm-5.3
+    drops the leading `{"` of function-call argument chunks, so Codex receives
+    e.g. `cmd":"pwd"}` instead of `{"cmd":"pwd"}`. Non-streaming output is
+    intact. Strategy: validate first (healthy args pass through untouched);
+    then try structural candidates -- bare first key (`^[A-Za-z_]\\w*\\s*:`)
+    gets a `{"` prefix, plus brace-prefix/suffix combinations. Returns the
+    input unchanged when nothing valid is found (fail-safe).
+    """
+    if not isinstance(s, str) or not s.strip():
+        return s
+    try:
+        if isinstance(json.loads(s), dict):
+            return s
+    except Exception:
+        pass
+    t = s.strip()
+    prefixes = ["", "{"]
+    suffixes = ["", "}"]
+    if re.match(r"^[A-Za-z_][A-Za-z0-9_]*\s*\"?\s*:", t):
+        prefixes.insert(0, '{"')
+    for p in prefixes:
+        for x in suffixes:
+            cand = p + t + x
+            if cand == s:
+                continue
+            try:
+                if isinstance(json.loads(cand), dict):
+                    return cand
+            except Exception:
+                continue
+    return s
+
+
+def _fc_args_broken(args):
+    if not isinstance(args, str) or args == "":
+        return False
+    try:
+        return not isinstance(json.loads(args), dict)
+    except Exception:
+        return True
+
+
+def _normalize_fc_args_history(parsed):
+    """Repair broken assistant function_call arguments in replayed history.
+
+    Same root cause as _repair_json_object_args: sessions that ran while the
+    upstream adapter was dropping `{"` carry malformed arguments items; the
+    model imitates its own malformed history when they are replayed verbatim.
+    Only zen/go routes call this; healthy history is left byte-identical.
+    """
+    input_items = parsed.get("input") if isinstance(parsed, dict) else None
+    if not isinstance(input_items, list):
+        return False
+    changed = False
+    for item in input_items:
+        if not isinstance(item, dict) or item.get("type") != "function_call":
+            continue
+        args = item.get("arguments")
+        if not _fc_args_broken(args):
+            continue
+        fixed = _repair_json_object_args(args)
+        if fixed != args:
+            item["arguments"] = fixed
+            changed = True
+    if changed:
+        _log("[vision-proxy] repaired malformed function_call arguments in zen/go request history")
+    return changed
+
+
 # Models that do NOT support web_search history (mimo/GLM/chat-adapted). Switching
 # into them with history containing web_search_call must be intercepted and
 # prompt new session (preserve integrity vs silent drop). Go-wide check, but
@@ -1162,16 +1234,20 @@ def _complete_sse_frame(frame, state):
             item["done"] = True
             item_id = item["item_id"]
             output_index = item["output_index"]
+            repaired = _repair_json_object_args(item.get("args_acc", ""))
+            if repaired != item.get("args_acc", ""):
+                _log(f"[vision-proxy] repaired fc args at stream close item_id={item_id} "
+                     f"model={compat.get('model')}")
             out.append(_sse_event("response.function_call_arguments.done", {
                 "type": "response.function_call_arguments.done", "sequence_number": seq,
                 "item_id": item_id, "output_index": output_index,
-                "arguments": item.get("args_acc", "")}))
+                "arguments": repaired}))
             out.append(_sse_event("response.output_item.done", {
                 "type": "response.output_item.done", "sequence_number": seq + 1,
                 "output_index": output_index,
                 "item": {"id": item_id, "type": "function_call", "status": "completed",
                          "name": item.get("name") or "tool", "call_id": item.get("call_id") or item_id,
-                         "arguments": item.get("args_acc", "")}}))
+                         "arguments": repaired}}))
             seq += 2
             compat["seq"] = seq
 
@@ -1252,10 +1328,28 @@ def _complete_sse_frame(frame, state):
             if item:
                 if isinstance(payload.get("arguments"), str):
                     item["args_acc"] = payload["arguments"]
+                raw_args = payload.get("arguments")
                 new_payload = dict(payload)
                 new_payload["item_id"] = item["item_id"]
                 new_payload["output_index"] = item["output_index"]
+                if _fc_args_broken(raw_args):
+                    repaired = _repair_json_object_args(raw_args)
+                    if repaired != raw_args:
+                        _log(f"[vision-proxy] repaired fc args in arguments.done item_id={item['item_id']} "
+                             f"model={compat.get('model')} broken={raw_args[:60]!r}")
+                        new_payload["arguments"] = repaired
+                        return [_sse_event("response.function_call_arguments.done", new_payload)]
                 return [_sse_event("response.function_call_arguments.done", new_payload)]
+            # no tracked fc_item (e.g. args.done without prior added/delta): repair in place
+            raw_args = payload.get("arguments")
+            if _fc_args_broken(raw_args):
+                repaired = _repair_json_object_args(raw_args)
+                if repaired != raw_args:
+                    _log(f"[vision-proxy] repaired fc args in arguments.done (untracked) "
+                         f"broken={raw_args[:60]!r}")
+                    new_payload = dict(payload)
+                    new_payload["arguments"] = repaired
+                    return [_sse_event("response.function_call_arguments.done", new_payload)]
             return [frame]
 
         if etype in ("response.completed", "response.failed", "response.incomplete"):
@@ -1269,6 +1363,16 @@ def _complete_sse_frame(frame, state):
             item = payload.get("item") or {}
             if item.get("type") == "function_call" and compat.get("fc_item"):
                 compat["fc_item"]["done"] = True
+            if item.get("type") == "function_call" and _fc_args_broken(item.get("arguments")):
+                repaired = _repair_json_object_args(item.get("arguments"))
+                if repaired != item.get("arguments"):
+                    _log(f"[vision-proxy] repaired fc args in output_item.done call_id={item.get('call_id')} "
+                         f"model={compat.get('model')} broken={str(item.get('arguments'))[:60]!r}")
+                    new_payload = dict(payload)
+                    fixed_item = dict(item)
+                    fixed_item["arguments"] = repaired
+                    new_payload["item"] = fixed_item
+                    return [_sse_event("response.output_item.done", new_payload)]
             return [frame]
 
         if etype in ("response.output_text.done", "response.output_text.delta.any", "response.content_part.added"):
@@ -1347,13 +1451,15 @@ class Proxy:
                 ws_changed = (zen_changed or go_changed) and _strip_web_search_tool(parsed, model, go_changed)
                 wsc_changed = (zen_changed or go_changed) and _normalize_web_search_call(parsed)
                 ac_changed = (zen_changed or go_changed) and _normalize_assistant_content(parsed)
+                fca_changed = (zen_changed or go_changed) and _normalize_fc_args_history(parsed)
                 id_changed = go_changed and _sanitize_input_ids(parsed)
                 req_changed = go_changed and _fix_tool_required(parsed)
-                if image_changed or model_changed or zen_changed or go_changed or tools_changed or ws_changed or wsc_changed or ac_changed or id_changed or req_changed:
+                if image_changed or model_changed or zen_changed or go_changed or tools_changed or ws_changed or wsc_changed or ac_changed or fca_changed or id_changed or req_changed:
                     body = bytearray(json.dumps(parsed).encode())
             model = parsed.get("model") if isinstance(parsed, dict) else None
             zen_route = isinstance(parsed, dict) and zen_changed
             go_route = isinstance(parsed, dict) and go_changed
+            self._last_model = model
             _log(f"[vision-proxy] request {method} {path} model={model} body_bytes={len(body)} zen={zen_route} go={go_route}")
             # intercept search=true history -> search=false model (preserve integrity)
             if go_route and _intercept_unsupported_history(parsed, model):
@@ -1455,7 +1561,8 @@ class Proxy:
         await self._write_head(writer, status, headers, None)
         read_chunk = getattr(response, "read1", response.read)
         buffer = bytearray()
-        state = {"pending": {}, "completed": False}
+        state = {"pending": {}, "completed": False,
+                 "compat": {"model": getattr(self, "_last_model", None)}}
 
         async def emit(frame_bytes):
             writer.write(frame_bytes)
