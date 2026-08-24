@@ -4,14 +4,21 @@
 
 ## 使用方法
 
+本安装器现在支持 **安装 / 更新** 双模式，双击后会先让你选择：
+
+- **安装**：全新安装或重装，需要填写 Key（留空则沿用旧 Key，与之前行为一致）
+- **更新**：已安装过的机器，一键更新最新的配置/模板/视觉代理/补丁脚本，**无需重新填写 Key**，自动复用 `~/.codex-deepseek/config.toml` 与 `~/.config/agent-vision-toolkit/env` 里的现有 Key
+
+### 全新安装
+
 1. 把 `codex-oneclick-setup.zip` 拷到新 Mac（AirDrop / U 盘均可），双击解压。
-2. 如果提示“无法打开，因为无法验证开发者”，对 `codex-oneclick-setup.command` 右键 → 打开 一次，或先执行：
+2. 如果提示"无法打开，因为无法验证开发者"，对 `codex-oneclick-setup.command` 右键 → 打开 一次，或先执行：
 
    ```bash
    xattr -dr com.apple.quarantine codex-oneclick-setup.command
    ```
 
-3. 双击 `codex-oneclick-setup.command`，按提示依次输入（全部可选，但 Go 与 DeepSeek 至少填一个）：
+3. 双击 `codex-oneclick-setup.command`，先选 **安装**，再按提示依次输入（全部可选，但 Go 与 DeepSeek 至少填一个）：
 
    - OpenCode Go / Zen 订阅 Key：缺它 → 所有 `*-go` 模型不会安装。
    - DeepSeek 官方 API Key：缺它 → 官方 `deepseek-v4-flash/pro` 不会显示，默认模型自动改用 Go 模型。
@@ -19,6 +26,20 @@
    - 这台 Mac 的开机密码（或自定义密码）：仅用于创建本地签名钥匙串，保存于 `~/.codex/picker-patch/.keychain-pass`（权限 600）。
 
 4. 等待自动完成（复制/补丁 app、生成配置、启动视觉代理约需 1–3 分钟），最后会弹窗汇总。
+
+### 已安装机器的更新
+
+1. 用最新版 `codex-oneclick-setup.zip` 覆盖旧的安装器（或 `git pull` 更新）。
+2. 双击 `codex-oneclick-setup.command`，这次选 **更新**。
+3. 无需填 Key，安装器会自动读取现有 Key，直接更新配置模板、视觉代理文件与补丁脚本，并尝试重启视觉代理与重建副本（如需要）。
+
+命令行直接指定模式（也可配合无人值守）：
+
+```bash
+./codex-oneclick-setup.command --update          # 一键更新，不弹窗
+./codex-oneclick-setup.command --install         # 强制走安装流程
+./codex-oneclick-setup.command --update --skip-patch  # 仅更新配置，不重建 App 副本
+```
 
 ## 安装后会得到什么
 
@@ -42,7 +63,8 @@
 
 ## 更新 Key / 重新安装
 
-直接再双击一次 `.command`：输入框留空时会自动沿用现有 key；输入新 key 则覆盖。旧的 `config.toml` / `models.json` / `AGENTS.md` 会先备份成 `*.bak.<时间戳>`。
+- 想**更新修复/配置**但不想重填 Key：双击后选 **更新**，自动复用现有 Key。
+- 想**更换 Key**：双击后选 **安装**，输入框留空时会自动沿用现有 Key，输入新 Key 则覆盖。旧的 `config.toml` / `models.json` / `AGENTS.md` 会先备份成 `*.bak.<时间戳>`。
 
 补填 GLM key 后手动生效：
 

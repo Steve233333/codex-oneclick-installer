@@ -3,11 +3,14 @@
 # Codex 一键配置安装器（macOS）
 # 双击本文件即可；也可在终端手动运行：
 #   ./codex-oneclick-setup.command
+# 交互：双击后会先让你选“安装 / 更新”；更新模式无需重填 Key
 # 高级参数（测试/无人值守）：
 #   --noninteractive     使用 ONECLICK_GO_KEY / ONECLICK_DS_KEY /
 #                        ONECLICK_GLM_KEY / ONECLICK_PASS 环境变量，不弹窗
 #   --skip-patch         不重建 ChatGPT-Patched.app（只生成配置）
 #   --skip-proxy-start   生成代理文件但不启动 launchd 服务
+#   --update               直接进入更新模式（不弹窗，复用旧 Key）
+#   --install              直接进入安装模式（弹窗填 Key）
 # =============================================================================
 set -uo pipefail
 
@@ -94,14 +97,82 @@ end run
 APPLESCRIPT
 }
 
+ask_choice() {
+  osascript - "$1" "$2" <<'APPLESCRIPT'
+on run argv
+  set thePrompt to item 1 of argv
+  set theTitle to item 2 of argv
+  try
+    set theAnswer to button returned of (display dialog thePrompt with title theTitle buttons {"更新", "安装"} default button "安装" cancel button "更新" with icon note)
+    return theAnswer
+  on error
+    return "__CANCEL__"
+  end try
+end run
+APPLESCRIPT
+}
+
 # ---------------------------------------------------------------------------
-# 1. 读取/收集三个 Key（全可选，但 Go 与 DeepSeek 至少一个）
+# 0. 模式选择：安装 / 更新
 # ---------------------------------------------------------------------------
+MODE="install"
+# CLI 指定
+for arg in "$@"; do
+  case "$arg" in
+    --update) MODE="update" ;;
+    --install) MODE="install" ;;
+  esac
+done
+
+if [[ "$NONINTERACTIVE" -eq 0 ]]; then
+  # 如果未通过 CLI 指定，弹窗让用户选择
+  NEED_CHOICE=1
+  for arg in "$@"; do
+    case "$arg" in
+      --update|--install) NEED_CHOICE=0 ;;
+    esac
+  done
+  if [[ "$NEED_CHOICE" -eq 1 ]]; then
+    CHOICE="$(ask_choice "请选择操作：\n\n● 安装：全新安装/重装，需要填写 Key（留空沿用旧 Key）\n● 更新：已安装过的机器，一键更新修复/模板/视觉代理，无需重新填 Key" "Codex 一键配置安装器")"
+    if [[ "$CHOICE" == "__CANCEL__" ]]; then
+      die "已取消"
+    elif [[ "$CHOICE" == "更新" ]]; then
+      MODE="update"
+    else
+      MODE="install"
+    fi
+  fi
+fi
+
+# 更新模式：提前校验是否存在旧安装
 CODEX_HOME="$HOME/.codex-deepseek"
 ENV_FILE="$HOME/.config/agent-vision-toolkit/env"
 PATCH_BASE="$HOME/.codex/picker-patch"
 PASS_FILE="$PATCH_BASE/.keychain-pass"
 
+if [[ "$MODE" == "update" ]]; then
+  if [[ ! -f "$CODEX_HOME/config.toml" && ! -f "$ENV_FILE" ]]; then
+    if [[ "$NONINTERACTIVE" -eq 1 ]]; then
+      die "更新模式下未检测到现有安装（~/.codex-deepseek/config.toml 与 ~/.config/agent-vision-toolkit/env 均不存在），请改用 安装 模式。"
+    else
+      # 友好提示并切回安装
+      osascript - "未检测到现有安装，将为你切换到“安装”模式。\n\n请继续填写 Key 完成首次安装。" "Codex 一键配置安装器" <<'APPLESCRIPT' >/dev/null 2>&1 || true
+on run argv
+  display dialog (item 1 of argv) with title "Codex 一键配置安装器" buttons {"好"} default button "好" with icon note
+end run
+APPLESCRIPT
+      MODE="install"
+    fi
+  else
+    log "模式：更新（复用现有 Key，不重新输入）"
+  fi
+else
+  log "模式：安装"
+fi
+
+# ---------------------------------------------------------------------------
+# 1. 读取/收集三个 Key（全可选，但 Go 与 DeepSeek 至少一个）
+# ---------------------------------------------------------------------------
 EXISTING_GO="$(grep '^ZEN_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
 EXISTING_DS="$(awk -F'"' '/^experimental_bearer_token *=/{print $2}' "$CODEX_HOME/config.toml" 2>/dev/null | head -1 || true)"
 EXISTING_GLM="$(grep '^VISION_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
@@ -111,30 +182,49 @@ DS_KEY=""
 GLM_KEY=""
 PASS=""
 
-if [[ "$NONINTERACTIVE" -eq 1 ]]; then
-  GO_KEY="${ONECLICK_GO_KEY:-}"
-  DS_KEY="${ONECLICK_DS_KEY:-}"
-  GLM_KEY="${ONECLICK_GLM_KEY:-}"
-  PASS="${ONECLICK_PASS:-}"
+if [[ "$MODE" == "update" ]]; then
+  # 更新模式：直接沿用现有 Key，不弹窗
+  GO_KEY="$EXISTING_GO"
+  DS_KEY="$EXISTING_DS"
+  GLM_KEY="$EXISTING_GLM"
+  # 去空格
+  GO_KEY="${GO_KEY// /}"
+  DS_KEY="${DS_KEY// /}"
+  GLM_KEY="${GLM_KEY// /}"
+  if [[ -z "$GO_KEY" && -z "$DS_KEY" ]]; then
+    die "更新模式下未找到任何 Key（Go 与 DeepSeek 均为空）。请改用“安装”并填写至少一个 Key。"
+  fi
+  log "更新模式：沿用 Go=\${#GO_KEY}位 DeepSeek=\${#DS_KEY}位 GLM=\${#GLM_KEY}位（不重新输入）"
+  # 更新模式下密码也直接复用，不再询问（除非缺失）
+  if [[ -f "$PASS_FILE" && -z "$PASS" ]]; then
+    PASS="$(cat "$PASS_FILE" 2>/dev/null || true)"
+  fi
 else
-  GO_KEY="$(ask_hidden "OpenCode Go / Zen 订阅 Key（必填其一）\n\n请粘贴你的 sk-... key。\n\n缺这个 key 的后果：所有 *-go 模型（deepseek-go / mimo / glm / luna / muse 等）不会安装，只能使用官方 DeepSeek。" "① OpenCode Go Key" "")"
-  [[ "$GO_KEY" == "__CANCEL__" ]] && die "已取消安装"
-  DS_KEY="$(ask_hidden "DeepSeek 官方 API Key（可选）\n\n请粘贴 sk-... key。\n\n缺这个 key 的后果：官方 deepseek-v4-flash-vision-exp / deepseek-v4-pro 两个模型不会显示，默认模型会自动改走 Go 模型。" "② DeepSeek Key" "")"
-  [[ "$DS_KEY" == "__CANCEL__" ]] && die "已取消安装"
-  GLM_KEY="$(ask_hidden "智谱 GLM 视觉 Key（可选）\n\n请粘贴 open.bigmodel.cn 的 key（格式类似 1234.xxxx）。\n\n缺这个 key 的后果：Codex 文本对话不受影响，但发图片会失败；之后可随时补填到 ~/.config/agent-vision-toolkit/env。" "③ 智谱 GLM 视觉 Key" "")"
-  [[ "$GLM_KEY" == "__CANCEL__" ]] && die "已取消安装"
-fi
+  if [[ "$NONINTERACTIVE" -eq 1 ]]; then
+    GO_KEY="${ONECLICK_GO_KEY:-}"
+    DS_KEY="${ONECLICK_DS_KEY:-}"
+    GLM_KEY="${ONECLICK_GLM_KEY:-}"
+    PASS="${ONECLICK_PASS:-}"
+  else
+    GO_KEY="$(ask_hidden "OpenCode Go / Zen 订阅 Key（必填其一）\n\n请粘贴你的 sk-... key。\n\n缺这个 key 的后果：所有 *-go 模型（deepseek-go / mimo / glm / luna / muse 等）不会安装，只能使用官方 DeepSeek。" "① OpenCode Go Key" "")"
+    [[ "$GO_KEY" == "__CANCEL__" ]] && die "已取消安装"
+    DS_KEY="$(ask_hidden "DeepSeek 官方 API Key（可选）\n\n请粘贴 sk-... key。\n\n缺这个 key 的后果：官方 deepseek-v4-flash-vision-exp / deepseek-v4-pro 两个模型不会显示，默认模型会自动改走 Go 模型。" "② DeepSeek Key" "")"
+    [[ "$DS_KEY" == "__CANCEL__" ]] && die "已取消安装"
+    GLM_KEY="$(ask_hidden "智谱 GLM 视觉 Key（可选）\n\n请粘贴 open.bigmodel.cn 的 key（格式类似 1234.xxxx）。\n\n缺这个 key 的后果：Codex 文本对话不受影响，但发图片会失败；之后可随时补填到 ~/.config/agent-vision-toolkit/env。" "③ 智谱 GLM 视觉 Key" "")"
+    [[ "$GLM_KEY" == "__CANCEL__" ]] && die "已取消安装"
+  fi
 
-# 去空格；留空时回落到现有配置（重复安装/更新 key 场景）
-GO_KEY="${GO_KEY// /}"
-DS_KEY="${DS_KEY// /}"
-GLM_KEY="${GLM_KEY// /}"
-GO_KEY="${GO_KEY:-$EXISTING_GO}"
-DS_KEY="${DS_KEY:-$EXISTING_DS}"
-GLM_KEY="${GLM_KEY:-$EXISTING_GLM}"
+  # 去空格；留空时回落到现有配置（重复安装/更新 key 场景）
+  GO_KEY="${GO_KEY// /}"
+  DS_KEY="${DS_KEY// /}"
+  GLM_KEY="${GLM_KEY// /}"
+  GO_KEY="${GO_KEY:-$EXISTING_GO}"
+  DS_KEY="${DS_KEY:-$EXISTING_DS}"
+  GLM_KEY="${GLM_KEY:-$EXISTING_GLM}"
 
-if [[ -z "$GO_KEY" && -z "$DS_KEY" ]]; then
-  die "至少需要 OpenCode Go 或 DeepSeek 其中一个 key，请重新运行安装器。"
+  if [[ -z "$GO_KEY" && -z "$DS_KEY" ]]; then
+    die "至少需要 OpenCode Go 或 DeepSeek 其中一个 key，请重新运行安装器。"
+  fi
 fi
 for k in "$GO_KEY" "$DS_KEY" "$GLM_KEY"; do
   if [[ -n "$k" && "${#k}" -lt 8 ]]; then
@@ -151,6 +241,7 @@ log "输入校验通过：Go=$HAS_GO DeepSeek=$HAS_DS GLM=$HAS_GLM"
 
 # ---------------------------------------------------------------------------
 # 2. 签名密码：优先复用，否则让用户输入本机开机密码（或自定义密码）
+#    更新模式下已复用，不再重复弹窗
 # ---------------------------------------------------------------------------
 if [[ "$SKIP_PATCH" -eq 0 ]]; then
   if [[ -f "$PASS_FILE" && -z "$PASS" ]]; then
@@ -159,12 +250,16 @@ if [[ "$SKIP_PATCH" -eq 0 ]]; then
   if [[ -z "$PASS" && "$NONINTERACTIVE" -eq 1 ]]; then
     PASS="${ONECLICK_PASS:-}"
   fi
-  if [[ -z "$PASS" ]]; then
+  if [[ -z "$PASS" && "$MODE" != "update" ]]; then
     PASS="$(ask_hidden "这台 Mac 的开机密码（用于创建本地签名钥匙串）\n\n只会保存在 ~/.codex/picker-patch/.keychain-pass（权限 600），不会上传或联网。\n\n如果你不想用开机密码，也可以输入任意自定义密码，但请务必记好（升级副本时还会用到）。" "签名钥匙串密码" "")"
     [[ "$PASS" == "__CANCEL__" ]] && die "已取消安装"
     if [[ -z "$PASS" ]]; then
       die "没有输入签名密码，无法创建 ChatGPT-Patched 副本。"
     fi
+  fi
+  if [[ -z "$PASS" && "$MODE" == "update" ]]; then
+    log "更新模式：未找到签名密码，将使用 --skip-patch 自动跳过副本重建（如需重建请改用安装）"
+    # 不强制 die，交给后续 SKIP_PATCH / patch.sh 处理；若确实需要 patch 则会提示
   fi
 fi
 
@@ -402,7 +497,11 @@ else
   PATCH_TEXT="失败，请查看 ~/.codex/picker-patch/patch.log"
 fi
 
-SUMMARY=$'安装完成 ✅\n\n可用模型：'"$MODEL_COUNT"$' 个\n默认模型：'"$DEFAULT_MODEL"$'\n看图：'"$VISION_TEXT"$'\n双开副本：'"$PATCH_TEXT"$'\n\n下一步：\n1. 如果副本已启动，先完全退出再重新打开 Codex（生效）。\n2. 可选：gh auth login -h github.com 登录 GitHub；git config --global user.name/email 设置身份。\n3. 日志：'"$LOG"
+if [[ "$MODE" == "update" ]]; then
+  SUMMARY=$'更新完成 ✅\n\n可用模型：'"$MODEL_COUNT"$' 个\n默认模型：'"$DEFAULT_MODEL"$'\n看图：'"$VISION_TEXT"$'\n双开副本：'"$PATCH_TEXT"$'\n\n说明：已用现有 Key 复用更新配置/模板/视觉代理/补丁脚本，无需重填 Key。\n下一步：如副本在运行请重启生效；日志：'"$LOG"
+else
+  SUMMARY=$'安装完成 ✅\n\n可用模型：'"$MODEL_COUNT"$' 个\n默认模型：'"$DEFAULT_MODEL"$'\n看图：'"$VISION_TEXT"$'\n双开副本：'"$PATCH_TEXT"$'\n\n下一步：\n1. 如果副本已启动，先完全退出再重新打开 Codex（生效）。\n2. 可选：gh auth login -h github.com 登录 GitHub；git config --global user.name/email 设置身份。\n3. 日志：'"$LOG"
+fi
 
 log "$SUMMARY"
 if [[ "$NONINTERACTIVE" -eq 0 ]]; then
