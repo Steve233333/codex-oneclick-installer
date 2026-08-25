@@ -53,6 +53,23 @@
 | `~/.codex/picker-patch/` | 副本补丁工程（patch.sh、证书、日志） |
 | `~/Library/Logs/codex-oneclick-setup.log` | 安装日志 |
 
+## 视觉代理内置能力（2026-08 更新）
+
+`vision_proxy.py` 除图像理解转发外，还内置以下自愈/增强层（源码 `resources/vision/`，含回归测试 `tests/`）：
+
+- **responses→chat 降级桥**：OpenCode Go 网关对非 DeepSeek 模型（mimo/glm/ox-alpha）的 `/v1/responses` 曾长期 500，代理检测到故障会自动改走 `/v1/chat/completions` 并双向翻译协议；网关恢复后自动回归直通。mimo/glm/ox-alpha 因此在 Codex 副本里始终可用。
+- **打字机流式**：桥内增量状态机逐块转发增量，回复逐字输出而非整段到达。
+- **思考过程可见**：上游 `reasoning_content` 映射为 Codex 的推理摘要，实时显示模型思考。
+- **断流兜底**：上游 SSE 中途断线时代理合成终止帧，Codex 不会卡死转圈。
+- **内存闸门**：累计文本 16MB / 非流式体 64MB 上限，超限优雅截断。
+- **UA 清洗**：出站请求不泄露 python-urllib 指纹（Cloudflare 1010 拦截）。
+
+回归验证（需代理已启动 + Go key）：
+
+```bash
+cd ~/.local/share/agent-vision-toolkit && python3 tests/run_regression.py
+```
+
 ## 缺 key 的后果
 
 - 只填 DeepSeek：没有 `*-go` 模型，直连 `https://api.deepseek.com/`，无看图。
