@@ -41,10 +41,9 @@ def _load_reasoning_registry():
         return {}
 
 def _clamp_reasoning_effort(model, effort):
-    """Clamp requested effort to registry, generic fallback high only, no probe."""
+    """Clamp requested effort to registry, generic fallback high only, no probe. Rank-aware."""
     if not isinstance(effort, str) or not effort:
         return effort
-    # strip -go / -zen suffix for lookup
     bare = model or ""
     for suf in ("-go", "-zen"):
         if bare.endswith(suf):
@@ -53,16 +52,55 @@ def _clamp_reasoning_effort(model, effort):
     reg = _load_reasoning_registry()
     allowed = reg.get(bare)
     if allowed is None:
-        allowed = ["high"]  # generic
+        allowed = ["high"]
     if effort in allowed:
         return effort
-    # clamp to high if available, else first allowed
-    if "high" in allowed:
-        _log(f"[vision-proxy] reasoning clamp {model} {effort} -> high (registry {allowed})")
+    # handle aliases
+    alias = {"minimal": "low", "ultra": "max", "none": None}
+    if effort in alias:
+        mapped = alias[effort]
+        if mapped is None:
+            return effort
+        if mapped in allowed:
+            _log(f"[vision-proxy] reasoning clamp {model} {effort} -> {mapped} (alias)")
+            return mapped
+        effort = mapped
+        if effort in allowed:
+            return effort
+    # rank-aware nearest
+    ORDER = ["low","medium","high","xhigh","max"]
+    # map high->xhigh for qwen style where high not in allowed but xhigh is
+    if effort == "high" and "xhigh" in allowed and "high" not in allowed:
+        _log(f"[vision-proxy] reasoning clamp {model} high -> xhigh (qwen)")
+        return "xhigh"
+    if effort == "xhigh" and "high" in allowed and "xhigh" not in allowed:
+        _log(f"[vision-proxy] reasoning clamp {model} xhigh -> high")
         return "high"
-    clamped = allowed[0] if allowed else effort
-    _log(f"[vision-proxy] reasoning clamp {model} {effort} -> {clamped} (registry {allowed})")
-    return clamped
+    try:
+        req_idx = ORDER.index(effort)
+    except ValueError:
+        # unknown effort, fallback to high or first
+        if "high" in allowed:
+            _log(f"[vision-proxy] reasoning clamp {model} {effort} -> high (unknown)")
+            return "high"
+        return allowed[0] if allowed else effort
+    # find nearest allowed by rank distance, prefer higher on tie
+    best = allowed[0]
+    best_dist = 999
+    best_rank = -1
+    for a in allowed:
+        try:
+            a_idx = ORDER.index(a)
+        except ValueError:
+            continue
+        dist = abs(a_idx - req_idx)
+        # tie prefer higher rank
+        if dist < best_dist or (dist == best_dist and a_idx > best_rank):
+            best = a
+            best_dist = dist
+            best_rank = a_idx
+    _log(f"[vision-proxy] reasoning clamp {model} {effort} -> {best} (registry {allowed})")
+    return best
 
 # OpenCode Zen free-model routing. Models whose slug ends with ZEN_SUFFIX are
 # forwarded to the Zen upstream with the suffix stripped and the Zen API key

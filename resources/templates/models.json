@@ -30,7 +30,7 @@
       "default_reasoning_summary": "none",
       "display_name": "Grok-4.6 (Go)",
       "description": "OpenCode Go subscription model (grok-4.6), routed via opencode.ai Zen/Go proxy. auto-discovered 2026-08-27",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
         {
           "effort": "low",
@@ -97,7 +97,7 @@
       "default_reasoning_summary": "none",
       "display_name": "GPT-5.6 Luna (Go)",
       "description": "OpenCode Go subscription model (gpt-5.6-luna), routed via opencode.ai Zen/Go proxy. native responses. $10/mo plan",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
         {
           "effort": "low",
@@ -173,11 +173,19 @@
       "default_reasoning_summary": "none",
       "display_name": "GLM-5.3-Flash (Go)",
       "description": "OpenCode Go subscription model (glm-5.3-flash), routed via opencode.ai Zen/Go proxy. auto-discovered 2026-08-27",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
         {
           "effort": "high",
           "description": "Extra high reasoning depth for complex problems"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth for the hardest problems"
         }
       ],
       "shell_type": "shell_command",
@@ -232,8 +240,12 @@
       "default_reasoning_summary": "none",
       "display_name": "GLM-5.3 (Go)",
       "description": "OpenCode Go subscription model (glm-5.3), routed via opencode.ai Zen/Go proxy. new, $15/mo",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
         {
           "effort": "high",
           "description": "Extra high reasoning depth for complex problems"
@@ -363,6 +375,10 @@
         {
           "effort": "high",
           "description": "Extra high reasoning depth for complex problems"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth for the hardest problems"
         }
       ],
       "shell_type": "shell_command",
@@ -417,11 +433,19 @@
       "default_reasoning_summary": "none",
       "display_name": "Kimi-K3 (Go)",
       "description": "OpenCode Go subscription model (kimi-k3), routed via opencode.ai Zen/Go proxy. auto-discovered 2026-08-28",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
         {
           "effort": "high",
           "description": "Extra high reasoning depth for complex problems"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth for the hardest problems"
         }
       ],
       "shell_type": "shell_command",
@@ -476,7 +500,7 @@
       "default_reasoning_summary": "none",
       "display_name": "Kimi-K2.7-Code (Go)",
       "description": "OpenCode Go subscription model (kimi-k2.7-code), routed via opencode.ai Zen/Go proxy. auto-discovered 2026-08-27",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
         {
           "effort": "low",
@@ -543,7 +567,7 @@
       "default_reasoning_summary": "none",
       "display_name": "Kimi-K2.6 (Go)",
       "description": "OpenCode Go subscription model (kimi-k2.6), routed via opencode.ai Zen/Go proxy. auto-discovered 2026-08-27",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
         {
           "effort": "low",
@@ -610,7 +634,7 @@
       "default_reasoning_summary": "none",
       "display_name": "Longcat-2.0 (Go)",
       "description": "OpenCode Go subscription model (longcat-2.0), routed via opencode.ai Zen/Go proxy. auto-discovered 2026-08-27",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
         {
           "effort": "low",
@@ -677,7 +701,7 @@
       "default_reasoning_summary": "none",
       "display_name": "MiMo-V2.5 (Go)",
       "description": "OpenCode Go subscription model (mimo-v2.5), routed via opencode.ai Zen/Go proxy. main pick, $60/mo",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
         {
           "effort": "low",
@@ -803,11 +827,19 @@
       "default_reasoning_summary": "none",
       "display_name": "Minimax-M3 (Go)",
       "description": "OpenCode Go subscription model (minimax-m3), routed via opencode.ai Zen/Go proxy. auto-discovered 2026-08-28",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
         {
           "effort": "high",
           "description": "Extra high reasoning depth for complex problems"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth for the hardest problems"
         }
       ],
       "shell_type": "shell_command",
@@ -862,7 +894,7 @@
       "default_reasoning_summary": "none",
       "display_name": "Minimax-M2.7 (Go)",
       "description": "OpenCode Go subscription model (minimax-m2.7), routed via opencode.ai Zen/Go proxy. auto-discovered 2026-08-27",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
         {
           "effort": "low",
@@ -929,7 +961,7 @@
       "default_reasoning_summary": "none",
       "display_name": "Muse Spark 1.2 Contributor (Go)",
       "description": "OpenCode Go subscription model (muse-spark-1.2-contributor), routed via opencode.ai Zen/Go proxy. native responses. $10/mo plan",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
         {
           "effort": "low",
@@ -1001,11 +1033,19 @@
       "default_reasoning_summary": "none",
       "display_name": "Qwen3.8-Max (Go)",
       "description": "OpenCode Go subscription model (qwen3.8-max), routed via opencode.ai Zen/Go proxy. auto-discovered 2026-08-28",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
         {
-          "effort": "high",
-          "description": "Extra high reasoning depth for complex problems"
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning for everyday tasks"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extended reasoning depth for harder tasks"
         }
       ],
       "shell_type": "shell_command",
@@ -1365,7 +1405,7 @@
       "default_reasoning_summary": "none",
       "display_name": "DeepSeek-V4-Flash (Go)",
       "description": "OpenCode Go subscription model (deepseek-v4-flash), routed via opencode.ai Zen/Go proxy. 2x promo, $30/mo",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
         {
           "effort": "low",
@@ -1434,7 +1474,7 @@
       "default_reasoning_summary": "none",
       "display_name": "DeepSeek-V4-Flash Vision Exp",
       "description": "DeepSeek V4 Flash Vision (native image, experimental)",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
         {
           "effort": "low",
@@ -1501,7 +1541,7 @@
       "default_reasoning_summary": "none",
       "display_name": "DeepSeek-V4-Flash Vision Exp (Go)",
       "description": "OpenCode Go subscription model (deepseek-v4-flash-vision-exp), routed via opencode.ai Zen/Go proxy. native vision, experimental",
-      "default_reasoning_level": "high",
+      "default_reasoning_level": "low",
       "supported_reasoning_levels": [
         {
           "effort": "low",
@@ -1560,8 +1600,8 @@
       "use_responses_lite": false,
       "include_skills_usage_instructions": false,
       "auto_review_model_override": null,
-      "context_window": 202752,
-      "max_context_window": 202752,
+      "context_window": 262144,
+      "max_context_window": 262144,
       "effective_context_window_percent": 95,
       "auto_compact_token_limit": null,
       "comp_hash": "3000",
