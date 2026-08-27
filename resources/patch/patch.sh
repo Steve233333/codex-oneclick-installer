@@ -14,10 +14,7 @@ CODEX_HOME_DIR="$HOME/.codex-deepseek"
 # rebuilds. Keychain lives at ~/Library/Keychains/codex-signing.keychain-db.
 SIGN_IDENTITY="Codex Patched Signing"
 SIGN_KEYCHAIN="$HOME/Library/Keychains/codex-signing.keychain-db"
-# Password is created by the one-click installer and stored locally in
-# ~/.codex/picker-patch/.keychain-pass (mode 600). It defaults to the user's
-# macOS login password unless they chose a custom one.
-SIGN_KEYCHAIN_PASS="$(cat "$BASE/.keychain-pass" 2>/dev/null || true)"
+SIGN_KEYCHAIN_PASS="0000"
 
 # 26.810+: model visibility filter was rewritten. Old pattern was
 # 'i&&t!==`amazonBedrock`' (26.803-); new code is
@@ -36,8 +33,27 @@ log() {
   if [ "$SILENT" -ne 1 ]; then echo "$msg"; fi
 }
 
+resolve_source() {
+  if [ -d "$SOURCE" ] && [ -f "$SOURCE/Contents/Info.plist" ]; then
+    echo "$SOURCE"
+  elif [ -d "$HOME/Applications/ChatGPT.app" ] && [ -f "$HOME/Applications/ChatGPT.app/Contents/Info.plist" ]; then
+    echo "$HOME/Applications/ChatGPT.app"
+  else
+    echo "$SOURCE"
+  fi
+}
+
 app_version() {
-  /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$SOURCE/Contents/Info.plist" 2>/dev/null || echo "unknown"
+  local src
+  src=$(resolve_source)
+  local plist="$src/Contents/Info.plist"
+  if [ ! -f "$plist" ]; then echo "unknown"; return; fi
+  # PlistBuddy prints "File Doesn't Exist, Will Create..." to stdout on missing file,
+  # so pre-check existence and silence both stdout/stderr on error paths
+  local v
+  v=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$plist" 2>/dev/null) || v="unknown"
+  # filter out PlistBuddy's creation message if it leaked
+  if [[ "$v" == *"Will Create"* ]] || [[ "$v" == *"Does Not Exist"* ]]; then echo "unknown"; else echo "$v"; fi
 }
 
 patched_running() {
@@ -50,45 +66,6 @@ get_marker_version() {
   fi
 }
 
-ensure_cert() {
-  mkdir -p "$BASE/certs" "$BASE/scripts"
-  if security find-identity -p codesigning "$SIGN_KEYCHAIN" 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
-    log "signing identity already exists"
-    return 0
-  fi
-  if [ -z "$SIGN_KEYCHAIN_PASS" ]; then
-    log "WARN: no signing keychain password available; will fall back to ad-hoc signing"
-    return 0
-  fi
-  log "creating self-signed signing identity..."
-  rm -f "$SIGN_KEYCHAIN" "$BASE/certs/codex-sign2.key" "$BASE/certs/codex-sign2.crt" "$BASE/certs/codex-sign2.p12"
-  security create-keychain -p "$SIGN_KEYCHAIN_PASS" "$SIGN_KEYCHAIN" >> "$LOG" 2>&1
-  security set-keychain-settings "$SIGN_KEYCHAIN" >> "$LOG" 2>&1 || true
-  security unlock-keychain -p "$SIGN_KEYCHAIN_PASS" "$SIGN_KEYCHAIN" >> "$LOG" 2>&1 || true
-  openssl req -x509 -newkey rsa:2048 -keyout "$BASE/certs/codex-sign2.key" \
-    -out "$BASE/certs/codex-sign2.crt" -days 3650 -nodes \
-    -subj "/CN=$SIGN_IDENTITY/O=codex-oneclick" >> "$LOG" 2>&1
-  if openssl pkcs12 -export -help 2>&1 | grep -q '\-legacy'; then
-    openssl pkcs12 -export -inkey "$BASE/certs/codex-sign2.key" \
-      -in "$BASE/certs/codex-sign2.crt" -out "$BASE/certs/codex-sign2.p12" \
-      -passout "pass:$SIGN_KEYCHAIN_PASS" -legacy >> "$LOG" 2>&1
-  else
-    openssl pkcs12 -export -inkey "$BASE/certs/codex-sign2.key" \
-      -in "$BASE/certs/codex-sign2.crt" -out "$BASE/certs/codex-sign2.p12" \
-      -passout "pass:$SIGN_KEYCHAIN_PASS" >> "$LOG" 2>&1
-  fi
-  security import "$BASE/certs/codex-sign2.p12" -k "$SIGN_KEYCHAIN" \
-    -P "$SIGN_KEYCHAIN_PASS" -T /usr/bin/codesign -T /usr/bin/security >> "$LOG" 2>&1
-  security unlock-keychain -p "$SIGN_KEYCHAIN_PASS" "$SIGN_KEYCHAIN" >> "$LOG" 2>&1 || true
-  security add-trusted-cert -r trustRoot -p codeSign "$BASE/certs/codex-sign2.crt" >> "$LOG" 2>&1 || true
-  if security find-identity -p codesigning "$SIGN_KEYCHAIN" 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
-    log "signing identity created"
-  else
-    log "WARN: signing identity not visible to find-identity; codesign will attempt cert, ad-hoc is the fallback"
-  fi
-  return 0
-}
-
 is_patched() {
   local asar="$PATCHED/Contents/Resources/app.asar"
   [ -f "$asar" ] || return 1
@@ -97,6 +74,13 @@ is_patched() {
 
 build_patched() {
   log "== build patched copy =="
+  # Resolve actual source location (handles /Applications vs ~/Applications installs)
+  local actual_source
+  actual_source=$(resolve_source)
+  if [ "$actual_source" != "$SOURCE" ]; then
+    log "source resolved to $actual_source (canonical $SOURCE missing)"
+    SOURCE="$actual_source"
+  fi
   local version
   version=$(app_version)
   log "source version: $version"
@@ -105,8 +89,6 @@ build_patched() {
     log "ERROR: cannot read source app"
     exit 1
   fi
-
-  ensure_cert || exit 1
 
   if patched_running; then
     log "ERROR: patched copy is running, cannot rebuild"
@@ -197,23 +179,19 @@ build_patched() {
   local bindir="$PATCHED/Contents/MacOS"
   mv "$bindir/ChatGPT" "$bindir/ChatGPT.bin"
   local uddir="$HOME/Library/Application Support/Codex-Patched"
-  mkdir -p "$BASE/scripts"
   cat > "$BASE/scripts/launcher.c" << 'EOF'
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <string.h>
 
 int main(int argc, char **argv) {
-    const char *home = getenv("HOME");
-    if (!home) home = "/Users/Shared";
+    char *home = getenv("HOME");
+    if (!home) home = "/Users/steve233";
     char ud[1100];
-    char bin[1100];
     snprintf(ud, sizeof(ud), "--user-data-dir=%s/Library/Application Support/Codex-Patched", home);
-    snprintf(bin, sizeof(bin), "%s/Applications/ChatGPT-Patched.app/Contents/MacOS/ChatGPT.bin", home);
+    char *bin = "/Users/steve233/Applications/ChatGPT-Patched.app/Contents/MacOS/ChatGPT.bin";
     int n = argc + 1;
-    char **newargv = calloc((size_t)n + 1, sizeof(char *));
-    if (!newargv) return 1;
+    char **newargv = malloc(sizeof(char*) * (n + 1));
     newargv[0] = bin;
     newargv[1] = ud;
     for (int i = 1; i < argc; i++) newargv[i + 1] = argv[i];
@@ -306,15 +284,25 @@ uninstall() {
 }
 
 status() {
-  echo "source:        $SOURCE ($(app_version))"
-  echo "patched copy:  $([ -d "$PATCHED" ] && echo "$(app_version 2>/dev/null; /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PATCHED/Contents/Info.plist" 2>/dev/null) ($(is_patched && echo patched || echo unpatched))" || echo "not built")"
+  local src src_ver patched_ver
+  src=$(resolve_source)
+  src_ver=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$src/Contents/Info.plist" 2>/dev/null || echo "unknown")
+  if [[ "$src_ver" == *"Will Create"* ]] || [[ "$src_ver" == *"Does Not Exist"* ]]; then src_ver="unknown"; fi
+  if [ -d "$PATCHED" ]; then
+    patched_ver=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PATCHED/Contents/Info.plist" 2>/dev/null || echo "unknown")
+    if [[ "$patched_ver" == *"Will Create"* ]]; then patched_ver="unknown"; fi
+    echo "source:        $src ($src_ver)"
+    echo "patched copy:  $PATCHED ($patched_ver) ($(is_patched && echo patched || echo unpatched))"
+  else
+    echo "source:        $src ($src_ver)"
+    echo "patched copy:  not built"
+  fi
   echo "marker:        $(get_marker_version)"
   echo "agent:         $([ -f "$AGENT_PLIST" ] && echo "plist installed" || echo "not installed")"
 }
 
 case "${1:-}" in
   --install)   install ;;
-  --ensure-cert) ensure_cert ;;
   --auto-update) auto_update ;;
   --uninstall) uninstall ;;
   --status)    status ;;

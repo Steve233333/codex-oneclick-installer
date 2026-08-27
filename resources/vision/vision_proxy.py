@@ -23,6 +23,47 @@ CODEX_HEADERS = {"originator", "session-id", "thread-id", "user-agent"}
 
 DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
+# Reasoning registry (hand-written, generic fallback high) - zero probe
+_REASONING_REGISTRY_PATH = os.path.expanduser("~/.local/share/agent-vision-toolkit/reasoning_registry.json")
+_REASONING_CACHE = None
+_REASONING_CACHE_MTIME = 0
+def _load_reasoning_registry():
+    global _REASONING_CACHE, _REASONING_CACHE_MTIME
+    try:
+        mtime = os.path.getmtime(_REASONING_REGISTRY_PATH)
+        if _REASONING_CACHE is not None and mtime == _REASONING_CACHE_MTIME:
+            return _REASONING_CACHE
+        data = json.loads(open(_REASONING_REGISTRY_PATH).read())
+        _REASONING_CACHE = data
+        _REASONING_CACHE_MTIME = mtime
+        return data
+    except Exception:
+        return {}
+
+def _clamp_reasoning_effort(model, effort):
+    """Clamp requested effort to registry, generic fallback high only, no probe."""
+    if not isinstance(effort, str) or not effort:
+        return effort
+    # strip -go / -zen suffix for lookup
+    bare = model or ""
+    for suf in ("-go", "-zen"):
+        if bare.endswith(suf):
+            bare = bare[: -len(suf)]
+            break
+    reg = _load_reasoning_registry()
+    allowed = reg.get(bare)
+    if allowed is None:
+        allowed = ["high"]  # generic
+    if effort in allowed:
+        return effort
+    # clamp to high if available, else first allowed
+    if "high" in allowed:
+        _log(f"[vision-proxy] reasoning clamp {model} {effort} -> high (registry {allowed})")
+        return "high"
+    clamped = allowed[0] if allowed else effort
+    _log(f"[vision-proxy] reasoning clamp {model} {effort} -> {clamped} (registry {allowed})")
+    return clamped
+
 # OpenCode Zen free-model routing. Models whose slug ends with ZEN_SUFFIX are
 # forwarded to the Zen upstream with the suffix stripped and the Zen API key
 # substituted for whatever Authorization the client sent.
@@ -128,14 +169,22 @@ def _rewrite_go_model(parsed):
 # (chat adapter regression), while /v1/chat/completions stays healthy. For the
 # models below we transparently retry via chat and translate both directions,
 # so Codex keeps speaking Responses against 127.0.0.1:19100.
+# 2026-08-28: expanded to include all known chat-adapted Go models; new models
+# auto-fallback on 500 even if not in this set (generic bridge in handle()).
 RESPONSES_FALLBACK_MODELS = frozenset({
-    "mimo-v2.5", "mimo-v2.5-pro",
-    "glm-5", "glm-5.1", "glm-5.2", "glm-5.3",
-    "ox-alpha-free",
+    "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-pro", "mimo-v2-omni",
+    "glm-5", "glm-5.1", "glm-5.2", "glm-5.3", "glm-5.3-flash",
+    "ox-alpha-free", "x-preview-f-free",
+    "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.7-max", "qwen3.8-max",
+    "kimi-k3", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code",
+    "minimax-m3", "minimax-m2.7", "minimax-m2.5",
+    "longcat-2.0", "grok-4.5", "grok-4.6",
+    "hy3", "hy3-preview",
 })
 _RESPONSES_BROKEN_UNTIL = {}      # model -> monotonic deadline to skip probing /responses
 _RESPONSES_FALLBACK_TTL = 300.0   # seconds a broken probe result stays cached
 _BRIDGE_NONSTREAM_MAX_BYTES = 64 * 1024 * 1024  # P5: cap for buffered non-stream chat bodies
+# Generic fallback: for any Go /responses that 500s, auto-bridge even if not in set
 
 
 def _content_parts_to_chat(content):
@@ -221,7 +270,8 @@ def _responses_request_to_chat(parsed):
     reasoning = parsed.get("reasoning")
     effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
     if effort:
-        payload["reasoning_effort"] = effort
+        clamped = _clamp_reasoning_effort(parsed.get("model"), effort)
+        payload["reasoning_effort"] = clamped
     # max_output_tokens intentionally NOT forwarded: capping would truncate thinking.
     return payload
 
@@ -815,21 +865,21 @@ def _normalize_fc_args_history(parsed):
 # into them with history containing web_search_call must be intercepted and
 # prompt new session (preserve integrity vs silent drop). Go-wide check, but
 # only triggers when history actually contains web_search_call.
+# 2026-08-28: expanded to full Go chat-adapted set; unknown models fallback to whitelist check in _intercept_unsupported_history.
 _SEARCH_FALSE_MODELS = frozenset(
     {
-        "mimo-v2.5",
-        "mimo-v2.5-pro",
-        "glm-5",
-        "glm-5.1",
-        "glm-5.2",
-        "glm-5.3",
-        "ox-alpha",
-        "ox-alpha-free",
-        "x-preview-f-free",
-        "hy3",
-        "hy3-preview",
+        "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-pro", "mimo-v2-omni",
+        "glm-5", "glm-5.1", "glm-5.2", "glm-5.3", "glm-5.3-flash",
+        "ox-alpha", "ox-alpha-free", "x-preview-f-free",
+        "hy3", "hy3-preview",
+        "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.7-max", "qwen3.8-max",
+        "kimi-k3", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code",
+        "minimax-m3", "minimax-m2.7", "minimax-m2.5",
+        "longcat-2.0", "grok-4.5", "grok-4.6",
     }
 )
+# search=true whitelist (only these keep web_search on Go)
+_SEARCH_TRUE_PREFIXES = ("deepseek-", "gpt-5.6-luna", "muse-spark-1.2")
 
 
 def _intercept_unsupported_history(parsed, model):
@@ -842,7 +892,8 @@ def _intercept_unsupported_history(parsed, model):
     if not isinstance(model, str):
         return False
     # strip -go / -zen suffix already done by caller; model is bare id
-    if model not in _SEARCH_FALSE_MODELS:
+    # Generic future-proof: only search-true whitelist keeps history, all others (known + unknown) intercept
+    if model.startswith(_SEARCH_TRUE_PREFIXES):
         return False
     input_items = parsed.get("input")
     if not isinstance(input_items, list):
@@ -922,6 +973,43 @@ def _fix_tool_required(parsed):
     if changed:
         _log("[vision-proxy] patched tool required[] to include 'limit' for Luna/Muse Go 400")
     return changed
+
+
+def _prune_old_images(parsed, keep_last=3):
+    """Keep only the N most recent input_image in Responses history.
+
+    The crush-skill pattern reads 6-10 long screenshots (1080x4000 -> 553x2048)
+    and keeps every image in history. Even when local token count (144k) is far
+    below the model window (800k), the bridge forwards 1.6MB of base64 data-URIs
+    and upstream rejects with [1261] Prompt exceeds max length.
+    Single-image resolution is never changed - only older history images are
+    replaced with a short text placeholder so the conversation can continue.
+    Only called for the Go bridge route (responses->chat fallback).
+    """
+    input_items = parsed.get("input")
+    if not isinstance(input_items, list):
+        return False
+    # Collect positions of input_image in both content and output fields
+    positions = []  # (item, field, idx)
+    for item in input_items:
+        if not isinstance(item, dict):
+            continue
+        for field in ("content", "output"):
+            vals = item.get(field)
+            if isinstance(vals, list):
+                for idx, v in enumerate(vals):
+                    if isinstance(v, dict) and v.get("type") == "input_image":
+                        positions.append((item, field, idx))
+    if len(positions) <= keep_last:
+        return False
+    to_prune = positions[:-keep_last]
+    for item, field, idx in to_prune:
+        item[field][idx] = {
+            "type": "input_text",
+            "text": f"[image omitted - {len(to_prune)} earlier image(s) truncated for length; re-attach if needed]",
+        }
+    _log(f"[vision-proxy] pruned {len(to_prune)} old image(s) keep_last={keep_last} for length")
+    return True
 
 
 def _header_value(headers, name):
@@ -2017,7 +2105,17 @@ class Proxy:
                 fca_changed = (zen_changed or go_changed) and _normalize_fc_args_history(parsed)
                 id_changed = go_changed and _sanitize_input_ids(parsed)
                 req_changed = go_changed and _fix_tool_required(parsed)
-                if image_changed or model_changed or zen_changed or go_changed or tools_changed or ws_changed or wsc_changed or ac_changed or fca_changed or id_changed or req_changed:
+                prune_changed = go_changed and _prune_old_images(parsed, keep_last=3)
+                # reasoning clamp: generic high fallback, hand-written registry, zero probe
+                reasoning_changed = False
+                if isinstance(parsed, dict) and isinstance(parsed.get("reasoning"), dict):
+                    eff = parsed["reasoning"].get("effort")
+                    if isinstance(eff, str) and eff:
+                        clamped = _clamp_reasoning_effort(parsed.get("model"), eff)
+                        if clamped != eff:
+                            parsed["reasoning"]["effort"] = clamped
+                            reasoning_changed = True
+                if image_changed or model_changed or zen_changed or go_changed or tools_changed or ws_changed or wsc_changed or ac_changed or fca_changed or id_changed or req_changed or prune_changed or reasoning_changed:
                     body = bytearray(json.dumps(parsed).encode())
             model = parsed.get("model") if isinstance(parsed, dict) else None
             zen_route = isinstance(parsed, dict) and zen_changed
@@ -2052,21 +2150,24 @@ class Proxy:
             else:
                 upstream = self.upstream
                 headers = self._upstream_headers(incoming_headers)
+            is_responses_path = path.split("?")[0].rstrip("/").endswith("/responses")
             bridge_eligible = (
                 go_route
                 and isinstance(parsed, dict)
-                and model in RESPONSES_FALLBACK_MODELS
-                and path.split("?")[0].rstrip("/").endswith("/responses")
+                and is_responses_path
             )
+            # known chat-adapted models get instant fallback if TTL cached
+            bridge_cached = bridge_eligible and model in RESPONSES_FALLBACK_MODELS and time.monotonic() < _RESPONSES_BROKEN_UNTIL.get(model, 0.0)
             fallback_now = False
             upstream_status = 0
-            if bridge_eligible and time.monotonic() < _RESPONSES_BROKEN_UNTIL.get(model, 0.0):
-                # Probe result still cached: skip the doomed /responses call entirely.
+            if bridge_cached:
                 fallback_now = True
             else:
                 response = await self._open_upstream(method, path, bytes(body), headers, upstream)
                 upstream_status = getattr(response, "status", None) or getattr(response, "code", 0) or 0
                 if bridge_eligible and upstream_status >= 500:
+                    if model not in RESPONSES_FALLBACK_MODELS:
+                        _log(f"[vision-proxy] auto-bridge new model {model} on 500 (not in RESPONSES_FALLBACK_MODELS)")
                     fallback_now = True
             if fallback_now:
                 if response is not None:

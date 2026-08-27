@@ -454,6 +454,35 @@ EOF
     PROXY_OK=1
     log "代理文件已生成（--skip-proxy-start，未启动服务）"
   fi
+
+  # Go 模型自动发现（quota 表 6h + 启动，跟表自动同步，限免自动识别）
+  if [[ "$HAS_GLM" -eq 1 || "$HAS_GO" -eq 1 ]]; then
+    DISCOVERY_PLIST="$HOME/Library/LaunchAgents/com.steve233.go-model-discovery.plist"
+    cat > "$DISCOVERY_PLIST" <<EOF2
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.steve233.go-model-discovery</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$PY_BIN</string>
+    <string>$VISION_DIR/model_discovery.py</string>
+    <string>--sync</string>
+  </array>
+  <key>StartInterval</key><integer>21600</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$VISION_DIR/discovery.log</string>
+  <key>StandardErrorPath</key><string>$VISION_DIR/discovery.err.log</string>
+</dict>
+</plist>
+EOF2
+    launchctl bootout "gui/$(id -u)" "$DISCOVERY_PLIST" 2>/dev/null || launchctl unload "$DISCOVERY_PLIST" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$DISCOVERY_PLIST" 2>/dev/null || launchctl load "$DISCOVERY_PLIST" 2>/dev/null || true
+    log "Go 模型自动发现已安装（6h + 启动，跟配额表自动同步）"
+    # 立即同步一次（quota表 -> models.json）
+    "$PY_BIN" "$VISION_DIR/model_discovery.py" --sync --force >>"$LOG" 2>&1 || log "WARN: 首次 Go 模型同步失败，详见 $VISION_DIR/discovery.err.log"
+  fi
 else
   log "无需视觉代理（纯官方 DeepSeek 直连）"
 fi
