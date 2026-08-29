@@ -295,6 +295,7 @@ def build_entry(template, remote_id, priority):
 
 def sync(force=False, dry_run=False):
     # quota table is the source of truth (限免 + 三段配额), not /v1/models
+    # 返回 None = 抓不到表，这时用上次成功的 24 缓存顶着，绝不回退到 31 野名单
     qids = fetch_quota_ids()
     if qids:
         ids = qids
@@ -307,23 +308,19 @@ def sync(force=False, dry_run=False):
         except Exception:
             pass
     else:
-        cache = load_cache()
-        if not force and is_cache_fresh(cache):
-            ids = cache["ids"]
-            _log(f"cache fresh ({len(ids)} ids, age {int(time.time()-cache['fetchedAt'])}s), skip fetch")
-        else:
-            ids = fetch_remote_ids()
-            if ids is None:
-                _log("fetch failed, trying cache")
-                if cache and cache.get("ids"):
-                    ids = cache["ids"]
-                    _log(f"using cached {len(ids)} ids")
-                else:
-                    ids = FALLBACK_IDS
-                    _log(f"using fallback {len(ids)} ids")
+        # 抓不到配额表 -> 用上次成功的 quota 缓存顶着，有新模型要等下次抓成功才进来
+        try:
+            qc = json.loads(QUOTA_CACHE_FILE.read_text())
+            ids = qc.get("ids") or []
+            age = int(time.time() - qc.get("fetchedAt", 0))
+            if ids and len(ids) >= 10:
+                _log(f"quota fetch failed, use last quota cache {len(ids)} ids age {age}s (新模型等下次成功再进)")
             else:
-                _log(f"fetched {len(ids)} remote ids")
-                save_cache(ids)
+                _log("quota fetch failed and quota cache invalid, skip sync (不回退到31野名单)")
+                return 0
+        except Exception as e:
+            _log(f"quota fetch failed and no quota cache ({e!r}), skip sync (不回退到31)")
+            return 0
 
     j = load_models_json()
     models = j.get("models", [])

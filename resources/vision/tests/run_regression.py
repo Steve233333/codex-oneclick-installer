@@ -105,13 +105,18 @@ def c_mimo_bridge_stream_reasoning(key):
 
 
 def c_ox_tool_call(key):
+    # ox-alpha-free removed from Go 2026-08-28 (401 not supported); use glm-5.3-flash-go as drop-in (same chat-bridge + tool repair)
+    model = "glm-5.3-flash-go"
     tools = [{"type": "function", "name": "shell", "description": "Run a shell command",
               "parameters": {"type": "object",
                              "properties": {"cmd": {"type": "string"}, "limit": {"type": "number"}},
                              "required": ["cmd"]}}]
     st, body, _ = post("/v1/responses",
-                       responses_payload("ox-alpha-go", "用shell工具执行pwd", stream=True, tools=tools),
+                       responses_payload(model, "用shell工具执行pwd", stream=True, tools=tools),
                        key, timeout=180, stream=True)
+    if st == 401 and b"not supported" in body:
+        print(f"      SKIP {model} not supported upstream, skip")
+        return
     assert st == 200, f"status {st}: {body[:200]}"
     resp, _ = completed_from_sse(body)
     fcs = [o for o in resp["output"] if o["type"] == "function_call"]
