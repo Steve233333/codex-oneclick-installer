@@ -209,15 +209,19 @@ def _rewrite_go_model(parsed):
 # so Codex keeps speaking Responses against 127.0.0.1:19100.
 # 2026-08-28: expanded to include all known chat-adapted Go models; new models
 # auto-fallback on 500 even if not in this set (generic bridge in handle()).
+# 2026-08-29: add Zen Free chat models
 RESPONSES_FALLBACK_MODELS = frozenset({
     "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-pro", "mimo-v2-omni",
     "glm-5", "glm-5.1", "glm-5.2", "glm-5.3", "glm-5.3-flash",
     "ox-alpha-free", "x-preview-f-free",
-    "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.7-max", "qwen3.8-max",
+    "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.7-max", "qwen3.8-max", "qwen3.8-flash",
     "kimi-k3", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code",
     "minimax-m3", "minimax-m2.7", "minimax-m2.5",
     "longcat-2.0", "grok-4.5", "grok-4.6",
-    "hy3", "hy3-preview",
+    "hy3", "hy3-preview", "hy4-preview",
+    # Zen Free chat
+    "big-pickle", "hy3-free", "ling-3.0-flash-fin-free", "mimo-v2.5-free",
+    "nemotron-3-ultra-free", "nemotron-3.5-lightning-free",
 })
 _RESPONSES_BROKEN_UNTIL = {}      # model -> monotonic deadline to skip probing /responses
 _RESPONSES_FALLBACK_TTL = 300.0   # seconds a broken probe result stays cached
@@ -2190,7 +2194,7 @@ class Proxy:
                 headers = self._upstream_headers(incoming_headers)
             is_responses_path = path.split("?")[0].rstrip("/").endswith("/responses")
             bridge_eligible = (
-                go_route
+                (go_route or zen_route)
                 and isinstance(parsed, dict)
                 and is_responses_path
             )

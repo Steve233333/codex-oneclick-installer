@@ -27,6 +27,7 @@ from pathlib import Path
 
 GO_MODELS_URL = "https://opencode.ai/zen/go/v1/models"
 GO_DOCS_URLS = ["https://opencode.ai/docs/zh-cn/go/", "https://opencode.ai/docs/go/"]
+ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models"
 TTL_SECONDS = 24 * 3600
 TIMEOUT = 10
 QUOTA_TTL = 12 * 3600
@@ -35,6 +36,18 @@ CODEX_HOME = Path.home() / ".codex-deepseek"
 MODELS_JSON = CODEX_HOME / "models.json"
 CACHE_DIR = Path.home() / ".local/share/agent-vision-toolkit"
 CACHE_FILE = CACHE_DIR / "go_models_cache.json"
+
+# OpenCode Zen Free 官方7个（Pricing为准，实时更新也只认这7个）
+ZEN_FREE_IDS = [
+    "big-pickle",
+    "hy3-free",
+    "ling-3.0-flash-fin-free",
+    "mimo-v2.5-free",
+    "muse-spark-1.2-contributor-free",
+    "nemotron-3-ultra-free",
+    "nemotron-3.5-lightning-free",
+]
+ZEN_CACHE_FILE = CACHE_DIR / "zen_models_cache.json"
 REASONING_REGISTRY = CACHE_DIR / "reasoning_registry.json"
 GENERIC_REASONING = ["high"]
 
@@ -230,6 +243,49 @@ def load_reasoning_registry():
         pass
     return {}
 
+def fetch_zen_free_ids(timeout=TIMEOUT):
+    """实时拉 Zen Free 官方7个，过度依赖 Pricing 表，需校验存在才算"""
+    try:
+        req = urllib.request.Request(ZEN_MODELS_URL, headers={"Accept":"*/*","User-Agent":"model-discovery/1.0"})
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode())
+        # 3 shapes
+        raw_ids = []
+        if isinstance(data, list):
+            for v in data:
+                if isinstance(v, str): raw_ids.append(v)
+                elif isinstance(v, dict) and isinstance(v.get("id"), str): raw_ids.append(v["id"])
+        elif isinstance(data, dict):
+            d = data.get("data")
+            if isinstance(d, list):
+                for v in d:
+                    if isinstance(v, str): raw_ids.append(v)
+                    elif isinstance(v, dict) and isinstance(v.get("id"), str): raw_ids.append(v["id"])
+        raw_ids = [x.strip().lower() for x in raw_ids if x]
+        # 只认官方7个
+        ids = [i for i in ZEN_FREE_IDS if i in raw_ids]
+        if len(ids) >= 1:
+            try:
+                CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                qc={"ids":ids,"fetchedAt":int(time.time())}
+                ZEN_CACHE_FILE.write_text(json.dumps(qc, ensure_ascii=False))
+            except Exception:
+                pass
+            _log(f"zen free live {len(ids)}/{len(ZEN_FREE_IDS)} ids")
+            return ids
+    except Exception as e:
+        _log(f"zen fetch failed: {e!r}")
+    # fallback cache
+    try:
+        qc=json.loads(ZEN_CACHE_FILE.read_text())
+        ids=qc.get("ids") or []
+        _log(f"zen cache -> {len(ids)} ids")
+        return ids if ids else ZEN_FREE_IDS
+    except Exception:
+        pass
+    return ZEN_FREE_IDS
+
 def find_template(models, remote_id):
     # pick best template by prefix
     slug_map = {m["slug"]: m for m in models}
@@ -251,22 +307,52 @@ def find_template(models, remote_id):
     # generic chat-adapted fallback: use mimo template (supports tool call, image, no search)
     return get("mimo-v2.5-go") or get("glm-5-go") or models[0]
 
+def _display_name_for(remote_id, suffix):
+    # suffix = "Go" or "Zen"
+    # Zen: keep spaces e.g. "Muse Spark 1.2 Free (Zen)" to match screenshot
+    # Go: keep hyphens for version e.g. "MiMo-V2.5 (Go)"
+    if suffix == "Zen":
+        if remote_id == "big-pickle":
+            base = "Big Pickle Free"
+        elif remote_id == "muse-spark-1.2-contributor-free":
+            base = "Muse Spark 1.2 Free"
+        elif remote_id.endswith("-free"):
+            base_raw = remote_id[:-5]
+            base = base_raw.replace("-", " ").title()
+            base = base.replace("Gpt ", "GPT ").replace("Muse ", "Muse ").replace("Mimo ", "MiMo ").replace("Glm ", "GLM ").replace("Nemotron ", "Nemotron ")
+            base = base + " Free"
+        else:
+            base = remote_id.replace("-", " ").title()
+            base = base.replace("Gpt ", "GPT ").replace("Muse ", "Muse ").replace("Mimo ", "MiMo ").replace("Glm ", "GLM ")
+        return f"{base} ({suffix})"
+    else:
+        if remote_id == "big-pickle":
+            base = "Big Pickle Free"
+        elif remote_id.endswith("-free"):
+            base_raw = remote_id[:-5]
+            base = base_raw.replace("-", " ").title().replace(" ", "-")
+            base = base.replace("Gpt-", "GPT-").replace("Muse-", "Muse ").replace("Mimo-", "MiMo-").replace("Glm-", "GLM-").replace("Nemotron-", "Nemotron ")
+            base = base + " Free"
+        else:
+            base = remote_id.replace("-", " ").title().replace(" ", "-")
+            base = base.replace("Gpt-", "GPT-").replace("Muse-", "Muse ").replace("Mimo-", "MiMo-").replace("Glm-", "GLM-")
+        return f"{base} ({suffix})"
+
 def build_entry(template, remote_id, priority):
     e = copy.deepcopy(template)
-    slug = remote_id + "-go"
+    # Zen Free use -zen suffix, Go use -go
+    is_zen = remote_id in ZEN_FREE_IDS or remote_id.endswith("-free") and remote_id in ZEN_FREE_IDS or remote_id == "big-pickle"
+    suffix = "Zen" if is_zen else "Go"
+    slug_suffix = "-zen" if is_zen else "-go"
+    slug = remote_id + slug_suffix
     # handle alias collisions: ox-alpha already handled, but keep slug as remote_id-go
     e["slug"] = slug
-    # display_name: Title + (Go)
-    # e.g. kimi-k3 -> Kimi-K3 (Go)  or qwen3.7-max -> Qwen3.7-Max (Go)
-    disp = remote_id.replace("-", " ").title().replace(" ", "-")
-    # fixup known
-    disp = disp.replace("Gpt-", "GPT-").replace("Muse-", "Muse ").replace("Mimo-", "MiMo-").replace("Glm-", "GLM-")
-    e["display_name"] = f"{disp} (Go)"
-    e["description"] = f"OpenCode Go subscription model ({remote_id}), routed via opencode.ai Zen/Go proxy. auto-discovered {time.strftime('%Y-%m-%d')}"
+    e["display_name"] = _display_name_for(remote_id, suffix)
+    e["description"] = f"OpenCode {'Zen Free' if is_zen else 'Go'} model ({remote_id}), routed via opencode.ai {'Zen' if is_zen else 'Zen/Go'} proxy. auto-discovered {time.strftime('%Y-%m-%d')}"
     e["priority"] = priority
-    e["visibility"] = "hide"  # newModelPolicy=off
-    # supports_search_tool: only deepseek/gpt/muse keep true, rest false
-    if remote_id.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark")):
+    e["visibility"] = "list"
+    # supports_search_tool: only deepseek/gpt/muse keep true, rest false (Zen Free all false)
+    if not is_zen and remote_id.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark")):
         e["supports_search_tool"] = True
         if "web_search_tool_type" not in e:
             e["web_search_tool_type"] = "text"
@@ -274,8 +360,14 @@ def build_entry(template, remote_id, priority):
         e["supports_search_tool"] = False
         e.pop("web_search_tool_type", None)
     # reasoning: hand-written registry, fallback generic high only (zero probe)
+    # for Zen Free strip -free for lookup: mimo-v2.5-free -> mimo-v2.5
+    lookup = remote_id
+    if is_zen and remote_id.endswith("-free"):
+        lookup = remote_id[:-5]
+    if lookup == "big-pickle":
+        lookup = "big-pickle"
     reg = load_reasoning_registry()
-    levels = reg.get(remote_id)
+    levels = reg.get(remote_id) or reg.get(lookup)
     if levels is None:
         levels = GENERIC_REASONING
     # normalize to supported_reasoning_levels format
@@ -322,12 +414,16 @@ def sync(force=False, dry_run=False):
             _log(f"quota fetch failed and no quota cache ({e!r}), skip sync (不回退到31)")
             return 0
 
+    # also fetch Zen Free 7
+    zen_ids = fetch_zen_free_ids()
+    zen_slugs = {i + "-zen" if i != "big-pickle" else "big-pickle-zen" for i in zen_ids}
+    # treat Zen ids for template lookup (map to same)
     j = load_models_json()
     models = j.get("models", [])
     existing_slugs = {m["slug"] for m in models}
     max_prio = max((m.get("priority", 0) for m in models), default=0)
 
-    # Only quota-driven sync: ids is quota source (24)
+    # Only quota-driven sync: ids is quota source (25)
     to_add = []
     for rid in ids:
         slug = rid + "-go"
@@ -339,14 +435,32 @@ def sync(force=False, dry_run=False):
             continue
         entry = build_entry(tmpl, rid, max_prio + len(to_add) + 1)
         to_add.append(entry)
+    # add Zen Free
+    for rid in zen_ids:
+        slug = rid + "-zen" if rid != "big-pickle" else "big-pickle-zen"
+        if slug in existing_slugs or slug in {e["slug"] for e in to_add}:
+            continue
+        tmpl = find_template(models, rid)
+        if not tmpl:
+            _log(f"no template for zen {rid}, skip")
+            continue
+        entry = build_entry(tmpl, rid, max_prio + len(to_add) + 1)
+        to_add.append(entry)
 
-    # Prune wild Go models not in quota (乱七八糟的)
+    # Prune wild Go models not in quota (乱七八糟的) ; keep Zen separately
     quota_bare = set(ids)
-    # keep native deepseek without -go? they are separate, but they are in quota as deepseek, keep them
+    zen_bare = set(zen_ids)
     to_keep = []
     pruned = []
     for m in models:
         slug = m.get("slug","")
+        if slug.endswith("-zen"):
+            bare = slug[:-4]
+            if bare in zen_bare:
+                to_keep.append(m)
+            else:
+                pruned.append(slug)
+            continue
         if not slug.endswith("-go"):
             to_keep.append(m)
             continue
@@ -356,7 +470,7 @@ def sync(force=False, dry_run=False):
         else:
             pruned.append(slug)
     if pruned:
-        _log(f"prune wild not in quota: {pruned}")
+        _log(f"prune wild not in quota/zen: {pruned}")
 
     if not to_add and not pruned:
         _log("no new models to add and no prune")
@@ -378,19 +492,25 @@ def sync(force=False, dry_run=False):
         _log(f"backup -> {bak}")
 
     j["models"] = to_keep + to_add
-    # re-assign priorities 1..N to keep order stable by quota order
-    # map quota order for new, existing keep relative order
+    # re-assign priorities 1..N to keep order stable by quota order + Zen after Go
     quota_order = {rid:i for i,rid in enumerate(ids)}
+    zen_order = {rid:100+i for i,rid in enumerate(zen_ids)}
     def prio_key(m):
         slug=m.get("slug","")
+        if slug.endswith("-zen"):
+            bare=slug[:-4]
+            return (zen_order.get(bare, 999), m.get("priority",999))
         bare=slug[:-3] if slug.endswith("-go") else slug
         return (quota_order.get(bare, 999), m.get("priority",999))
     j["models"].sort(key=prio_key)
     # re-number priorities sequentially
     for i,m in enumerate(j["models"], start=1):
         m["priority"]=i
-        # ensure visibility list for quota models (including free)
-        if m["slug"].endswith("-go") and m["slug"][:-3] in quota_bare:
+        bare_go = m["slug"][:-3] if m["slug"].endswith("-go") else None
+        bare_zen = m["slug"][:-4] if m["slug"].endswith("-zen") else None
+        if bare_go and bare_go in quota_bare:
+            m["visibility"]="list"
+        if bare_zen and bare_zen in zen_bare:
             m["visibility"]="list"
     tmp = MODELS_JSON.with_suffix(".tmp")
     tmp.write_text(json.dumps(j, ensure_ascii=False, indent=2) + "\n")
