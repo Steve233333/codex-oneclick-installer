@@ -239,13 +239,15 @@ PY
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 
 int main(int argc, char **argv) {
     char *home = getenv("HOME");
-    if (!home) home = "/Users/steve233";
+    if (!home) home = "";
     char ud[1100];
+    char bin[1100];
     snprintf(ud, sizeof(ud), "--user-data-dir=%s/Library/Application Support/Codex-Patched", home);
-    char *bin = "/Users/steve233/Applications/ChatGPT-Patched.app/Contents/MacOS/ChatGPT.bin";
+    snprintf(bin, sizeof(bin), "%s/Applications/ChatGPT-Patched.app/Contents/MacOS/ChatGPT.bin", home);
     int n = argc + 1;
     char **newargv = malloc(sizeof(char*) * (n + 1));
     newargv[0] = bin;

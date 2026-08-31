@@ -240,27 +240,95 @@ HAS_GO=0; HAS_DS=0; HAS_GLM=0
 log "输入校验通过：Go=$HAS_GO DeepSeek=$HAS_DS GLM=$HAS_GLM"
 
 # ---------------------------------------------------------------------------
-# 2. 签名密码：优先复用，否则让用户输入本机开机密码（或自定义密码）
-#    更新模式下已复用，不再重复弹窗
+# 2. 签名密码：记录用，实际签名钥匙串固定 0000（与 skill 一致）
+#    不再强制要求用户输入；缺省 0000，更新模式复用旧值
 # ---------------------------------------------------------------------------
 if [[ "$SKIP_PATCH" -eq 0 ]]; then
   if [[ -f "$PASS_FILE" && -z "$PASS" ]]; then
     PASS="$(cat "$PASS_FILE" 2>/dev/null || true)"
   fi
   if [[ -z "$PASS" && "$NONINTERACTIVE" -eq 1 ]]; then
-    PASS="${ONECLICK_PASS:-}"
+    PASS="${ONECLICK_PASS:-0000}"
   fi
-  if [[ -z "$PASS" && "$MODE" != "update" ]]; then
-    PASS="$(ask_hidden "这台 Mac 的开机密码（用于创建本地签名钥匙串）\n\n只会保存在 ~/.codex/picker-patch/.keychain-pass（权限 600），不会上传或联网。\n\n如果你不想用开机密码，也可以输入任意自定义密码，但请务必记好（升级副本时还会用到）。" "签名钥匙串密码" "")"
-    [[ "$PASS" == "__CANCEL__" ]] && die "已取消安装"
-    if [[ -z "$PASS" ]]; then
-      die "没有输入签名密码，无法创建 ChatGPT-Patched 副本。"
+  if [[ -z "$PASS" ]]; then
+    # 安装模式仍给一次输入机会，但允许留空回落 0000
+    if [[ "$MODE" != "update" && "$NONINTERACTIVE" -eq 0 ]]; then
+      _tmp_pass="$(ask_hidden "签名钥匙串密码（可选，留空则使用 0000）\n\n仅保存在 ~/.codex/picker-patch/.keychain-pass（600），实际签名钥匙串固定 0000，不影响使用。" "签名钥匙串密码" "")"
+      if [[ "$_tmp_pass" != "__CANCEL__" && -n "$_tmp_pass" ]]; then
+        PASS="$_tmp_pass"
+      else
+        PASS="0000"
+      fi
+    else
+      PASS="0000"
     fi
   fi
-  if [[ -z "$PASS" && "$MODE" == "update" ]]; then
-    log "更新模式：未找到签名密码，尝试用现有钥匙串重建副本（失败则跳过）"
+  if [[ "$PASS" == "0000" ]]; then
+    log "签名钥匙串密码：使用默认 0000"
   fi
 fi
+
+# 自签证书现场生成（新机无证书时）
+ensure_codex_signing_cert() {
+  local certs_dir="$PATCH_BASE/certs"
+  local crt="$certs_dir/codex-sign2.crt"
+  local key="$certs_dir/codex-sign2.key"
+  local p12="$certs_dir/codex-sign2.p12"
+  local kc="$HOME/Library/Keychains/codex-signing.keychain-db"
+  mkdir -p "$certs_dir"
+  if [[ -f "$crt" && -f "$key" && -f "$p12" ]]; then
+    log "签名证书已存在，跳过生成"
+    # 确保钥匙串已导入
+    if [[ -f "$kc" ]]; then
+      security unlock-keychain -p 0000 "$kc" >>"$LOG" 2>&1 || true
+      security import "$p12" -k "$kc" -P codex123 -T /usr/bin/codesign -T /usr/bin/security >>"$LOG" 2>&1 || true
+    fi
+    return 0
+  fi
+  log "生成本机自签证书 Codex Patched Signing (RSA2048, 10年)..."
+  local extfile
+  extfile="$(mktemp)"
+  cat > "$extfile" <<'EXTEOF'
+basicConstraints=critical,CA:true
+keyUsage=critical,digitalSignature,keyCertSign,cRLSign
+extendedKeyUsage=codeSigning
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid:always,issuer
+EXTEOF
+  if ! openssl req -x509 -newkey rsa:2048 -nodes \
+    -keyout "$key" -out "$crt" -days 3650 \
+    -subj "/OU=2DC432GLL2/CN=Codex Patched Signing/O=steve233" \
+    -extfile "$extfile" >>"$LOG" 2>&1; then
+    log "WARN: openssl 生成证书失败，将回退到 ad-hoc 签名"
+    rm -f "$extfile"
+    return 1
+  fi
+  rm -f "$extfile"
+  chmod 600 "$key" 2>/dev/null || true
+  if ! openssl pkcs12 -export -legacy -out "$p12" -inkey "$key" -in "$crt" -password pass:codex123 >>"$LOG" 2>&1; then
+    openssl pkcs12 -export -out "$p12" -inkey "$key" -in "$crt" -password pass:codex123 >>"$LOG" 2>&1 || true
+  fi
+  chmod 600 "$p12" 2>/dev/null || true
+  if [[ ! -f "$kc" ]]; then
+    security create-keychain -p 0000 "$kc" >>"$LOG" 2>&1 || true
+  fi
+  security unlock-keychain -p 0000 "$kc" >>"$LOG" 2>&1 || true
+  security import "$p12" -k "$kc" -P codex123 -T /usr/bin/codesign -T /usr/bin/security >>"$LOG" 2>&1 || true
+  security set-keychain-settings -t 3600 -l -u "$kc" >>"$LOG" 2>&1 || true
+  # 加入搜索列表
+  if ! security list-keychains -d user 2>&1 | grep -q "codex-signing"; then
+    # best-effort add to list
+    security list-keychains -d user -s "$kc" $(security list-keychains -d user 2>&1 | tr -d '"' | xargs) >>"$LOG" 2>&1 || true
+  fi
+  if [[ -f "$crt" ]]; then
+    if sudo -n true 2>/dev/null; then
+      sudo security add-trusted-cert -d -r trustRoot -p codeSign -k "/Library/Keychains/System.keychain" "$crt" >>"$LOG" 2>&1 || log "提示：证书已生成但加入系统信任失败，不影响使用"
+    else
+      log "证书已生成（未自动加入系统信任，属正常，需 sudo 时可手动执行 security add-trusted-cert）"
+    fi
+  fi
+  log "自签证书已就绪：$crt"
+}
 
 # ---------------------------------------------------------------------------
 # 3. 依赖检查
@@ -489,7 +557,43 @@ fi
 # ---------------------------------------------------------------------------
 # 9. ChatGPT-Patched.app 副本（patch）
 # ---------------------------------------------------------------------------
+# 确保证书存在（新机）
+if [[ "$SKIP_PATCH" -eq 0 ]]; then
+  ensure_codex_signing_cert || log "WARN: 证书生成失败，仍将尝试 patch（可能回退 ad-hoc）"
+fi
+
+# 安装 codex-picker-patch 1h 常驻（skill §架构）
+install_picker_patch_agent() {
+  local plist="$HOME/Library/LaunchAgents/com.steve233.codex-picker-patch.plist"
+  local cmd
+  cmd="$(command -v bash || echo /bin/bash)"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat > "$plist" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.steve233.codex-picker-patch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$cmd</string>
+    <string>$PATCH_BASE/patch.sh</string>
+    <string>--auto-update</string>
+  </array>
+  <key>StartInterval</key><integer>3600</integer>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>$PATCH_BASE/patch.log</string>
+  <key>StandardErrorPath</key><string>$PATCH_BASE/patch.log</string>
+</dict>
+</plist>
+PLISTEOF
+  launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || launchctl unload "$plist" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || launchctl load "$plist" 2>/dev/null || true
+  log "codex-picker-patch 自动更新已安装（1h）"
+}
+
 PATCH_OK=0
+PATCH_VER_MSG=""
 if [[ "$SKIP_PATCH" -eq 0 ]]; then
   mkdir -p "$PATCH_BASE/certs" "$PATCH_BASE/scripts"
   cp -p "$SCRIPT_DIR/resources/patch/patch.sh" "$PATCH_BASE/patch.sh"
@@ -499,11 +603,47 @@ if [[ "$SKIP_PATCH" -eq 0 ]]; then
     printf '%s' "$PASS" > "$PASS_FILE"
     chmod 600 "$PASS_FILE"
   fi
-  if bash "$PATCH_BASE/patch.sh" --install; then
-    PATCH_OK=1
-    log "ChatGPT-Patched.app 已生成"
+  install_picker_patch_agent
+  # 版本感知重建：避免 --install 的 is_patched 短路
+  SRC_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/ChatGPT.app/Contents/Info.plist 2>/dev/null | grep -v "Will Create" || true)"; if [[ -z "$SRC_VER" || "$SRC_VER" == "unknown" ]]; then SRC_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$HOME/Applications/ChatGPT.app/Contents/Info.plist" 2>/dev/null | grep -v "Will Create" || true)"; fi; [[ -z "$SRC_VER" ]] && SRC_VER="unknown"
+  MARKER_VER="$(sed -nE 's/.*"sourceVersion": *"([^"]*)".*/\1/p' "$PATCH_BASE/patch-state.json" 2>/dev/null | head -1)"
+  NEED_REBUILD=0
+  if [[ -z "$MARKER_VER" || "$SRC_VER" != "$MARKER_VER" ]]; then
+    NEED_REBUILD=1
+  fi
+  if ! bash "$PATCH_BASE/patch.sh" --status 2>&1 | grep -q "patched"; then
+    NEED_REBUILD=1
+  fi
+  if [[ "$NEED_REBUILD" -eq 1 ]]; then
+    # 官方已升级时副本常驻会阻止重建，更新模式下自动退出
+    if pgrep -f "ChatGPT-Patched" >/dev/null 2>&1; then
+      if [[ "$MODE" == "update" ]]; then
+        log "检测到官方已升级（$MARKER_VER -> $SRC_VER），副本仍在运行，尝试自动退出重建..."
+        pkill -f "ChatGPT-Patched" 2>/dev/null || true
+        for _ in {1..10}; do pgrep -f "ChatGPT-Patched" >/dev/null 2>&1 || break; sleep 0.5; done
+      else
+        log "WARN: 副本正在运行，重建将延后；请退出副本后重试 patch.sh --auto-update"
+      fi
+    fi
+    if bash "$PATCH_BASE/patch.sh" --auto-update; then
+      # --auto-update 在已是最新时无输出，仍视为成功
+      PATCH_OK=1
+      PATCH_VER_MSG="（$SRC_VER）"
+      log "ChatGPT-Patched.app 已同步至 $SRC_VER"
+    else
+      # 回退：auto-update 可能因运行中 defer，尝试 --install
+      if bash "$PATCH_BASE/patch.sh" --install; then
+        PATCH_OK=1
+        PATCH_VER_MSG="（$SRC_VER）"
+        log "ChatGPT-Patched.app 已生成（fallback --install）"
+      else
+        log "WARN: patch.sh 执行失败，详见 $PATCH_BASE/patch.log"
+      fi
+    fi
   else
-    log "WARN: patch.sh 执行失败，详见 $PATCH_BASE/patch.log"
+    log "副本已是最新（$SRC_VER），跳过重建"
+    PATCH_OK=1
+    PATCH_VER_MSG="（$SRC_VER 已是最新）"
   fi
 else
   log "跳过副本 patch（--skip-patch）"
