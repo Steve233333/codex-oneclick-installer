@@ -14,7 +14,7 @@ CODEX_HOME_DIR="$HOME/.codex-deepseek"
 # rebuilds. Keychain lives at ~/Library/Keychains/codex-signing.keychain-db.
 SIGN_IDENTITY="Codex Patched Signing"
 SIGN_KEYCHAIN="$HOME/Library/Keychains/codex-signing.keychain-db"
-SIGN_KEYCHAIN_PASS="0000"
+SIGN_KEYCHAIN_PASS="$(cat "$HOME/.codex/picker-patch/.keychain-pass" 2>/dev/null | tr -d " \n\r" || true)"; [[ -z "$SIGN_KEYCHAIN_PASS" ]] && SIGN_KEYCHAIN_PASS="0000"  # fallback 兼容旧机，回退后 TCC 会提示重授
 
 # 26.810+: model visibility filter was rewritten. Old pattern was
 # 'i&&t!==`amazonBedrock`' (26.803-); new code is

@@ -240,32 +240,75 @@ HAS_GO=0; HAS_DS=0; HAS_GLM=0
 log "输入校验通过：Go=$HAS_GO DeepSeek=$HAS_DS GLM=$HAS_GLM"
 
 # ---------------------------------------------------------------------------
-# 2. 签名密码：记录用，实际签名钥匙串固定 0000（与 skill 一致）
-#    不再强制要求用户输入；缺省 0000，更新模式复用旧值
+# 2. 签名密码：强制自定义（不允许 0000 默认）
+#    已有 PASS_FILE 则复用；否则必须让用户输入自定义密码（≥4位，且≠0000）
 # ---------------------------------------------------------------------------
 if [[ "$SKIP_PATCH" -eq 0 ]]; then
   if [[ -f "$PASS_FILE" && -z "$PASS" ]]; then
     PASS="$(cat "$PASS_FILE" 2>/dev/null || true)"
-  fi
-  if [[ -z "$PASS" && "$NONINTERACTIVE" -eq 1 ]]; then
-    PASS="${ONECLICK_PASS:-0000}"
-  fi
-  if [[ -z "$PASS" ]]; then
-    # 安装模式仍给一次输入机会，但允许留空回落 0000
-    if [[ "$MODE" != "update" && "$NONINTERACTIVE" -eq 0 ]]; then
-      _tmp_pass="$(ask_hidden "签名钥匙串密码（可选，留空则使用 0000）\n\n仅保存在 ~/.codex/picker-patch/.keychain-pass（600），实际签名钥匙串固定 0000，不影响使用。" "签名钥匙串密码" "")"
-      if [[ "$_tmp_pass" != "__CANCEL__" && -n "$_tmp_pass" ]]; then
-        PASS="$_tmp_pass"
+    PASS="${PASS// /}"
+    if [[ -n "$PASS" && "$PASS" == "0000" ]]; then
+      if [[ "$MODE" == "update" ]]; then
+        log "WARN: 检测到旧密码 0000（更新模式暂沿用，下次安装请改为自定义）"
+        # keep 0000 for this update round to not break existing 0000 keychain
       else
-        PASS="0000"
+        log "WARN: 检测到旧密码为 0000，请重新设置为自定义密码"
+        PASS=""
       fi
-    else
-      PASS="0000"
     fi
   fi
-  if [[ "$PASS" == "0000" ]]; then
-    log "签名钥匙串密码：使用默认 0000"
+  if [[ -z "$PASS" && "$NONINTERACTIVE" -eq 1 ]]; then
+    PASS="${ONECLICK_PASS:-}"
+    PASS="${PASS// /}"
+    if [[ -z "$PASS" ]]; then
+      die "缺少签名钥匙串密码：请设置环境变量 ONECLICK_PASS 为自定义密码（不能为空，且不能为 0000，至少 4 位）后重试。"
+    fi
+    if [[ "${#PASS}" -lt 4 ]]; then
+      die "ONECLICK_PASS 过短（至少 4 位）。"
+    fi
+    if [[ "$PASS" == "0000" ]]; then
+      die "ONECLICK_PASS 不能为 0000，请使用自定义密码。"
+    fi
   fi
+  if [[ -z "$PASS" && "$MODE" == "update" && -f "$HOME/Library/Keychains/codex-signing.keychain-db" ]]; then
+    # 老机器无 PASS_FILE 但钥匙串已是 0000，更新时静默沿用避免打断
+    log "WARN: 未找到密码文件，检测到现有钥匙串，更新模式暂沿用 0000（建议下次安装改为自定义）"
+    PASS="0000"
+  fi
+  if [[ -z "$PASS" ]]; then
+    while true; do
+      _tmp_pass="$(ask_hidden "请设置签名钥匙串密码（必填，自定义）\n\n将保存在 ~/.codex/picker-patch/.keychain-pass（600），用于创建本地签名钥匙串。请务必记好，副本升级时会复用（不能为空，且不能为 0000，至少 4 位）。" "签名钥匙串密码" "")"
+      [[ "$_tmp_pass" == "__CANCEL__" ]] && die "已取消安装"
+      _tmp_pass="${_tmp_pass// /}"
+      if [[ -z "$_tmp_pass" ]]; then
+        osascript - "密码不能为空，请重新输入。" "Codex 一键配置安装器" <<'APPLESCRIPT' >/dev/null 2>&1 || true
+on run argv
+  display dialog (item 1 of argv) with title "Codex 一键配置安装器" buttons {"好"} default button "好" with icon stop
+end run
+APPLESCRIPT
+        continue
+      fi
+      if [[ "${#_tmp_pass}" -lt 4 ]]; then
+        osascript - "密码过短（至少 4 位），请重新输入。" "Codex 一键配置安装器" <<'APPLESCRIPT' >/dev/null 2>&1 || true
+on run argv
+  display dialog (item 1 of argv) with title "Codex 一键配置安装器" buttons {"好"} default button "好" with icon stop
+end run
+APPLESCRIPT
+        continue
+      fi
+      if [[ "$_tmp_pass" == "0000" ]]; then
+        osascript - "不能使用默认 0000，请设置自定义密码。" "Codex 一键配置安装器" <<'APPLESCRIPT' >/dev/null 2>&1 || true
+on run argv
+  display dialog (item 1 of argv) with title "Codex 一键配置安装器" buttons {"好"} default button "好" with icon stop
+end run
+APPLESCRIPT
+        continue
+      fi
+      PASS="$_tmp_pass"
+      break
+    done
+  fi
+  log "签名钥匙串密码：已设置（${#PASS} 位，自定义）"
 fi
 
 # 自签证书现场生成（新机无证书时）
@@ -278,9 +321,9 @@ ensure_codex_signing_cert() {
   mkdir -p "$certs_dir"
   if [[ -f "$crt" && -f "$key" && -f "$p12" ]]; then
     log "签名证书已存在，跳过生成"
-    # 确保钥匙串已导入
+    # 确保钥匙串已导入（使用当前自定义 PASS）
     if [[ -f "$kc" ]]; then
-      security unlock-keychain -p 0000 "$kc" >>"$LOG" 2>&1 || true
+      security unlock-keychain -p "$PASS" "$kc" >>"$LOG" 2>&1 || true
       security import "$p12" -k "$kc" -P codex123 -T /usr/bin/codesign -T /usr/bin/security >>"$LOG" 2>&1 || true
     fi
     return 0
@@ -310,9 +353,9 @@ EXTEOF
   fi
   chmod 600 "$p12" 2>/dev/null || true
   if [[ ! -f "$kc" ]]; then
-    security create-keychain -p 0000 "$kc" >>"$LOG" 2>&1 || true
+    security create-keychain -p "$PASS" "$kc" >>"$LOG" 2>&1 || true
   fi
-  security unlock-keychain -p 0000 "$kc" >>"$LOG" 2>&1 || true
+  security unlock-keychain -p "$PASS" "$kc" >>"$LOG" 2>&1 || true
   security import "$p12" -k "$kc" -P codex123 -T /usr/bin/codesign -T /usr/bin/security >>"$LOG" 2>&1 || true
   security set-keychain-settings -t 3600 -l -u "$kc" >>"$LOG" 2>&1 || true
   # 加入搜索列表
