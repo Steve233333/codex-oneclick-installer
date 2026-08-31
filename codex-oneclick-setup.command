@@ -404,13 +404,18 @@ fi
 # ---------------------------------------------------------------------------
 MODEL_TMPL="$SCRIPT_DIR/resources/templates/models.json"
 MODELS_OUT="$CODEX_HOME/models.json"
-python3 - "$MODEL_TMPL" "$MODELS_OUT" "$HAS_GO" "$HAS_DS" <<'PY'
+if [[ "$MODE" == "update" && -f "$MODELS_OUT" ]]; then
+  log "更新模式：保留现有 models.json（自动更新），跳过模板"
+  MODEL_COUNT="$(python3 -c 'import json;print(len(json.load(open("'"$MODELS_OUT"'"))["models"]))' 2>/dev/null || echo 0)"
+  AVAIL_SLUGS="$(python3 -c 'import json;print(" ".join(m["slug"] for m in json.load(open("'"$MODELS_OUT"'"))["models"]))' 2>/dev/null || true)"
+else
+  python3 - "$MODEL_TMPL" "$MODELS_OUT" "$HAS_GO" "$HAS_DS" <<'PY'
 import json, sys
 src, dst, has_go, has_ds = sys.argv[1], sys.argv[2], sys.argv[3] == "1", sys.argv[4] == "1"
 data = json.load(open(src))
 models = []
 for m in data["models"]:
-    is_go = m["slug"].endswith("-go")
+    is_go = m["slug"].endswith("-go") or m["slug"].endswith("-zen")
     if is_go and not has_go:
         continue
     if not is_go and not has_ds:
@@ -421,6 +426,7 @@ for i, m in enumerate(models, 1):
 json.dump({"models": models}, open(dst, "w"), ensure_ascii=False, indent=2)
 print(len(models))
 PY
+fi
 MODEL_COUNT="$(python3 -c 'import json;print(len(json.load(open("'"$MODELS_OUT"'"))["models"]))' 2>/dev/null || echo 0)"
 AVAIL_SLUGS="$(python3 -c 'import json;print(" ".join(m["slug"] for m in json.load(open("'"$MODELS_OUT"'"))["models"]))' 2>/dev/null || true)"
 log "models.json 已生成：$MODEL_COUNT 个模型"
@@ -471,16 +477,26 @@ fi
 
 python3 - "$SCRIPT_DIR/resources/templates/config.toml" "$CODEX_HOME/config.toml" \
   "$DEFAULT_MODEL" "$EXTRACT_MODEL" "$BASE_URL" "$BEARER" <<'PY'
-import sys
+import os, re, sys
 src, dst, default_model, extract_model, base_url, bearer = sys.argv[1:7]
-text = open(src).read()
-text = text.replace("__DEFAULT_MODEL__", default_model)
-text = text.replace("__REASONING_EFFORT__", "low")
-text = text.replace("__BASE_URL__", base_url)
-text = text.replace("__BEARER__", bearer)
-text = text.replace("__EXTRACT_MODEL__", extract_model)
-text = text.replace("__CONSOLIDATION_MODEL__", extract_model)
-open(dst, "w").write(text)
+if os.path.exists(dst) and open(dst).read().strip():
+    out = open(dst).read()
+    out = re.sub(r"^model\s*=.*", f'model = "{default_model}"', out, flags=re.MULTILINE)
+    out = re.sub(r"^model_reasoning_effort\s*=.*", 'model_reasoning_effort = "low"', out, flags=re.MULTILINE)
+    out = re.sub(r"base_url\s*=.*", f'base_url = "{base_url}"', out)
+    out = re.sub(r"experimental_bearer_token\s*=.*", f'experimental_bearer_token = "{bearer}"', out)
+    out = re.sub(r"extract_model\s*=.*", f'extract_model = "{extract_model}"', out)
+    out = re.sub(r"consolidation_model\s*=.*", f'consolidation_model = "{extract_model}"', out)
+    open(dst, "w").write(out)
+else:
+    text = open(src).read()
+    text = text.replace("__DEFAULT_MODEL__", default_model)
+    text = text.replace("__REASONING_EFFORT__", "low")
+    text = text.replace("__BASE_URL__", base_url)
+    text = text.replace("__BEARER__", bearer)
+    text = text.replace("__EXTRACT_MODEL__", extract_model)
+    text = text.replace("__CONSOLIDATION_MODEL__", extract_model)
+    open(dst, "w").write(text)
 PY
 chmod 600 "$CODEX_HOME/config.toml"
 log "config.toml 已生成（默认模型 $DEFAULT_MODEL，base_url $BASE_URL）"
@@ -501,8 +517,12 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
   mkdir -p "$VISION_DIR" "$HOME/.config/agent-vision-toolkit"
   cp -R "$SCRIPT_DIR/resources/vision/." "$VISION_DIR/" 2>/dev/null || true
   chmod +x "$VISION_DIR"/bin/* 2>/dev/null || true
-  : > "$ENV_FILE"
+  touch "$ENV_FILE"
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
+  tmp_env_x="$(mktemp)"
+  grep -vE '^(VISION_API_KEY|VISION_BASE_URL|VISION_MODEL|ZEN_API_KEY)=' "$ENV_FILE" 2>/dev/null > "$tmp_env_x" || true
   {
+    cat "$tmp_env_x"
     if [[ "$HAS_GLM" -eq 1 ]]; then
       printf 'VISION_API_KEY=%s\n' "$GLM_KEY"
       printf 'VISION_BASE_URL=https://open.bigmodel.cn/api/paas/v4\n'
@@ -510,9 +530,11 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
     else
       printf '# VISION_* 未配置：看图功能未启用\n'
     fi
-    printf 'LANG=zh\n\n'
-    printf 'ZEN_API_KEY=%s\n' "$GO_KEY"
-  } > "$ENV_FILE"
+    if ! grep -q '^LANG=' "$tmp_env_x" 2>/dev/null; then printf 'LANG=zh\n'; fi
+    if [[ -n "$GO_KEY" ]]; then printf 'ZEN_API_KEY=%s\n' "$GO_KEY"; fi
+  } > "$ENV_FILE.new"
+  mv "$ENV_FILE.new" "$ENV_FILE"
+  rm -f "$tmp_env_x"
   chmod 600 "$ENV_FILE"
 
   PY_BIN="$(command -v python3)"
