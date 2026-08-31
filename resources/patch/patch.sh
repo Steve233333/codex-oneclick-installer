@@ -19,9 +19,13 @@ SIGN_KEYCHAIN_PASS="0000"
 # 26.810+: model visibility filter was rewritten. Old pattern was
 # 'i&&t!==`amazonBedrock`' (26.803-); new code is
 # n.filter(e=>i.useHiddenModels&&r!==`amazonBedrock`?i.availableModels.has(e.model):!e.hidden)
+# 26.825: variables renamed to a.useHiddenModels&&i!==`amazonBedrock`
 # Patch flips `!==` -> `===` so the non-Bedrock filter path is skipped and
 # custom (DeepSeek) models are never filtered out by availableModels.
-PATTERN='i.useHiddenModels&&r!==`amazonBedrock`'
+# Keep both candidates for compatibility; auto-detect which exists.
+PATTERNS=('a.useHiddenModels&&i!==`amazonBedrock`' 'i.useHiddenModels&&r!==`amazonBedrock`')
+PATTERN_REGEX='useHiddenModels&&[^`]*!==`amazonBedrock`'
+PATTERN="$PATTERN_REGEX"
 PATCH_FROM='!=='
 PATCH_TO='==='
 SILENT=0
@@ -69,7 +73,7 @@ get_marker_version() {
 is_patched() {
   local asar="$PATCHED/Contents/Resources/app.asar"
   [ -f "$asar" ] || return 1
-  grep -aqE 'i\.useHiddenModels&&r===`amazonBedrock`' "$asar" 2>/dev/null
+  grep -aqE 'useHiddenModels&&[^`]*===`amazonBedrock`' "$asar" 2>/dev/null
 }
 
 build_patched() {
@@ -112,18 +116,21 @@ build_patched() {
   local plist="$PATCHED/Contents/Info.plist"
 
   # Unique-occurrence check: abort if the pattern moved (upstream rebuild).
-  local matches off
-  matches=$(grep -aboE "$PATTERN" "$asar" 2>/dev/null | wc -l | tr -d ' ')
+  local matches off snippet within
+  matches=$(grep -aboE "$PATTERN_REGEX" "$asar" 2>/dev/null | wc -l | tr -d ' ')
   if [ "$matches" -ne 1 ]; then
-    log "ERROR: pattern occurrences=$matches (expected 1), refusing to patch. App may have a code change."
+    log "ERROR: pattern occurrences=$matches (expected 1) for regex $PATTERN_REGEX, refusing to patch. App may have a code change."
     rm -rf "$PATCHED"
     exit 1
   fi
-  off=$(grep -aboE "$PATTERN" "$asar" 2>/dev/null | head -1 | cut -d: -f1)
-  # PATTERN itself contains the '!==' we need to flip; compute its offset
-  # within PATTERN and add it to the asar offset of PATTERN.
-  local within
-  within=$(printf '%s' "$PATTERN" | grep -aboF "$PATCH_FROM" | head -1 | cut -d: -f1)
+  off=$(grep -aboE "$PATTERN_REGEX" "$asar" 2>/dev/null | head -1 | cut -d: -f1)
+  snippet=$(grep -aoE "$PATTERN_REGEX" "$asar" 2>/dev/null | head -1)
+  within=$(printf '%s' "$snippet" | grep -aboF "$PATCH_FROM" | head -1 | cut -d: -f1)
+  if [ -z "$within" ]; then
+    log "ERROR: cannot locate $PATCH_FROM within matched pattern, refusing"
+    rm -rf "$PATCHED"
+    exit 1
+  fi
   off=$((off + within))
   printf '%s' "$PATCH_TO" | dd of="$asar" bs=1 seek="$off" count="${#PATCH_TO}" conv=notrunc 2>/dev/null
 
@@ -133,6 +140,55 @@ build_patched() {
     exit 1
   fi
   log "pattern '$PATTERN' patched ($PATCH_FROM -> $PATCH_TO) at offset $off"
+
+  # 26.825 picker single-line fix: 33 long display_name (Muse Spark 1.2 Contributor etc.) with allowWrap=true
+  # causes flex 36px row to overflow (26.820 was truncate single-line). Force truncate to restore 26.820 behavior.
+  if grep -aqF 'g=u?`whitespace-normal`:`truncate`' "$asar" 2>/dev/null || grep -aqF 'P?`whitespace-normal`:`truncate`' "$asar" 2>/dev/null; then
+    log "picker: patching single-line truncate (26.825 allowWrap fix)..."
+    _picker_tmp="$(mktemp -d)"
+    _picker_packed="$(mktemp /tmp/app-asar-picker.XXXXXX)"
+    if npx --yes asar extract "$asar" "$_picker_tmp" >>"$LOG" 2>&1; then
+      if python3 - "$_picker_tmp" >>"$LOG" 2>&1 <<'PY'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+patched = 0
+for p in root.rglob("app-initial-*.js"):
+    try:
+        txt = p.read_text(encoding="utf-8", errors="ignore")
+        orig = txt
+        if "g=u?`whitespace-normal`:`truncate`" in txt:
+            txt = txt.replace("g=u?`whitespace-normal`:`truncate`", "g=`truncate`")
+        if "J(`min-w-0`,P?`whitespace-normal`:`truncate`)" in txt:
+            txt = txt.replace("J(`min-w-0`,P?`whitespace-normal`:`truncate`)", "J(`min-w-0`,`truncate`)")
+        if "J(`min-w-0 text-xs leading-dense text-tertiary`,F?`whitespace-normal`:`truncate`)" in txt:
+            txt = txt.replace("J(`min-w-0 text-xs leading-dense text-tertiary`,F?`whitespace-normal`:`truncate`)", "J(`min-w-0 text-xs leading-dense text-tertiary`,`truncate`)")
+        if txt != orig:
+            p.write_text(txt, encoding="utf-8")
+            patched += 1
+            print(f"patched {p.relative_to(root)}")
+    except Exception as e:
+        print(f"skip {p}: {e}", file=sys.stderr)
+print(f"picker files patched: {patched}")
+sys.exit(0 if patched > 0 else 1)
+PY
+      then
+        if npx --yes asar pack "$_picker_tmp" "$_picker_packed" >>"$LOG" 2>&1 && [ -s "$_picker_packed" ]; then
+          cp -f "$_picker_packed" "$asar"
+          log "picker: single-line patch applied (truncate)"
+        else
+          log "WARN: picker asar pack failed, skipping picker fix (model visibility still patched)"
+        fi
+      else
+        log "WARN: picker python patch found 0 files, skipping"
+      fi
+      rm -rf "$_picker_tmp" "$_picker_packed" 2>/dev/null || true
+    else
+      log "WARN: asar extract failed, skipping picker fix (model visibility still patched)"
+      rm -rf "$_picker_tmp" "$_picker_packed" 2>/dev/null || true
+    fi
+  else
+    log "picker: no allowWrap pattern found, skipping picker fix"
+  fi
 
   # Disable Sparkle updates in the patched copy: replace the feed URL with a
   # same-length RFC-2606 reserved host (always fails DNS) so the in-app

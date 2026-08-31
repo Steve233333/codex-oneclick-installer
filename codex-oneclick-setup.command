@@ -103,7 +103,7 @@ on run argv
   set thePrompt to item 1 of argv
   set theTitle to item 2 of argv
   try
-    set theAnswer to button returned of (display dialog thePrompt with title theTitle buttons {"更新", "安装"} default button "安装" cancel button "更新" with icon note)
+    set theAnswer to button returned of (display dialog thePrompt with title theTitle buttons {"更新", "安装"} default button "安装" with icon note)
     return theAnswer
   on error
     return "__CANCEL__"
@@ -258,8 +258,7 @@ if [[ "$SKIP_PATCH" -eq 0 ]]; then
     fi
   fi
   if [[ -z "$PASS" && "$MODE" == "update" ]]; then
-    log "更新模式：未找到签名密码，将使用 --skip-patch 自动跳过副本重建（如需重建请改用安装）"
-    # 不强制 die，交给后续 SKIP_PATCH / patch.sh 处理；若确实需要 patch 则会提示
+    log "更新模式：未找到签名密码，尝试用现有钥匙串重建副本（失败则跳过）"
   fi
 fi
 
@@ -271,8 +270,8 @@ for tool in python3 openssl clang security codesign; do
     die "缺少依赖：$tool。请先运行 xcode-select --install 安装命令行工具后重试。"
   fi
 done
-if [[ "$SKIP_PATCH" -eq 0 && ! -d "/Applications/ChatGPT.app" ]]; then
-  die "没有找到 /Applications/ChatGPT.app。请先安装原版 Codex / ChatGPT 桌面版再运行。"
+if [[ "$SKIP_PATCH" -eq 0 && ! -d "/Applications/ChatGPT.app" && ! -d "$HOME/Applications/ChatGPT.app" ]]; then
+  die "没有找到 /Applications/ChatGPT.app 或 ~/Applications/ChatGPT.app。请先安装原版 Codex / ChatGPT 桌面版再运行。"
 fi
 
 # ---------------------------------------------------------------------------
