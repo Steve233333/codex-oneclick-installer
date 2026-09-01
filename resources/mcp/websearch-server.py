@@ -6,7 +6,7 @@ Exposes:
 - websearch(query, numResults=8, livecrawl=fallback, type=auto, contextMaxCharacters=10000)
 - webfetch(url)  // simple fetch via exa
 
-Only intended for the 26 models without native search (mimo/glm/kimi/qwen/hy3/etc).
+Only intended for the 24 models without native search (mimo/glm/kimi/qwen/hy3/etc).
 The 7 native-search models (deepseek*4, vision*2, muse-go, luna) should use hosted web_search.
 """
 import json, sys, hashlib, os
@@ -143,7 +143,7 @@ for line in sys.stdin:
         pass
     elif method == "tools/list":
         send({"jsonrpc":"2.0","id":req_id,"result":{"tools":[
-            {"name":"websearch","description":"Search the web for current info (for the 26 models without native search: mimo/glm/kimi/qwen/hy3/longcat/minimax/big-pickle etc). Native-search models (deepseek*4, vision*2, muse-go, luna) should use hosted web_search instead. Supports livecrawl fallback/preferred, type auto/fast/deep, numResults 1-10. Hosted via Exa/Parallel MCP, no API key, ~25s timeout.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"Websearch query"},"numResults":{"type":"number","description":"Number of results (default 8)"},"livecrawl":{"type":"string","enum":["fallback","preferred"],"description":"Live crawl mode"},"type":{"type":"string","enum":["auto","fast","deep"],"description":"Search type"},"contextMaxCharacters":{"type":"number","description":"Max context chars (default 10000)"}},"required":["query"]}},
+            {"name":"websearch","description":"Search the web for current info (for the 24 models without native search: mimo/glm/kimi/qwen/hy3/longcat/minimax/big-pickle etc). Native-search models (deepseek*4, vision*2, muse*2, luna, grok) should use hosted web_search instead. Supports livecrawl fallback/preferred, type auto/fast/deep, numResults 1-10. Hosted via Exa/Parallel MCP, no API key, ~25s timeout.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"Websearch query"},"numResults":{"type":"number","description":"Number of results (default 8)"},"livecrawl":{"type":"string","enum":["fallback","preferred"],"description":"Live crawl mode"},"type":{"type":"string","enum":["auto","fast","deep"],"description":"Search type"},"contextMaxCharacters":{"type":"number","description":"Max context chars (default 10000)"}},"required":["query"]}},
             {"name":"webfetch","description":"Fetch and extract content from a URL (via Exa livecrawl). Fallback to direct HTTP. Use for scraping a specific page.","inputSchema":{"type":"object","properties":{"url":{"type":"string","description":"URL to fetch"}},"required":["url"]}}
         ]}})
     elif method == "tools/call":

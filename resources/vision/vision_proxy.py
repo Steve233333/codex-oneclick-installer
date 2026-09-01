@@ -921,7 +921,7 @@ _SEARCH_FALSE_MODELS = frozenset(
     }
 )
 # search=true whitelist (only these keep web_search on Go)
-_SEARCH_TRUE_PREFIXES = ("deepseek-", "gpt-5.6-luna", "muse-spark-1.2")
+_SEARCH_TRUE_PREFIXES = ("deepseek-", "gpt-5.6-luna", "muse-spark-1.2", "grok-")
 
 
 def _intercept_unsupported_history(parsed, model):
