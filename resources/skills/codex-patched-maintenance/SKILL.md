@@ -197,7 +197,7 @@ description: 维护 ChatGPT 桌面版 DeepSeek 双开副本（ChatGPT-Patched.ap
 ## 环境事实备忘
 
 - macOS：darwin（Apple Silicon）；证书 p12 需 `-legacy`（openssl 3.x）
-- 副本 models.json：`~/.codex-deepseek/models.json`（14 个模型：官方 deepseek-v4-flash-vision-exp/pro + Go 12 个（deepseek×2+vision-exp/mimo×2/glm×4/luna/muse/ox-alpha）无 Zen 免费；supports_search_tool：官方 Vision Exp/pro、deepseek-v4-flash/pro-go、deepseek-v4-flash-vision-exp-go、gpt-5.6-luna-go、muse-spark-1.2-contributor-go=true，其余 false，见 §7/13/14/18）
+- 副本 models.json：`~/.codex-deepseek/models.json`（33 个：官方 deepseek 1 个 + Go/Zen 32 个；supports_search_tool：`✓ 6 个`（`deepseek-v4-pro, deepseek-v4-pro-go, deepseek-v4-flash-go, deepseek-v4-flash-vision-exp, deepseek-v4-flash-vision-exp-go, gpt-5.6-luna-go`），`✗ 27 个`（`muse×2, grok, glm×4, kimi×3, longcat, mimo×3, minimax×2, qwen×5, hy×2, big-pickle, ling, nemotron×2`），`muse-spark-1.2-contributor-go` 已于 2026-09-01 改 `false` 与 `free-zen` 对齐，见 §7/13/14/18/27）
 - models.json **排序规则**（2026-08-18 三次整理，2026-08-22 Vision Exp 置顶/插入，Codex 选择器按此顺序显示）：官方 Vision Exp/pro → Go 的 deepseek（flash-go、vision-exp-go、pro-go）→ Go 的 mimo（v2.5-go、mimo-v2.5-pro-go）→ Go 的 glm（5.3/5.2/5.1/5-go 版本倒序）→ Ox Alpha (Go) 限时
 - **排序由 `priority` 字段决定**（教训：只改 models.json 数组顺序无效，Codex 客户端按 priority 升序稳定排序，同值按数组顺序）：14 个模型已设为 1–14 与目标顺序一致；重排时数组顺序和 priority 必须同步改，备份 models.json.bak.20260821173828.before-hy3
 - 视觉代理：launchd 常驻 `com.agent-vision-toolkit.proxy`（端口 19100），DeepSeek 上游转发（另有 codex-vpn-502-fix skill）
@@ -343,4 +343,18 @@ rm -rf ~/Library/Application\ Support/Codex-Patched/GPUCache ~/Library/Applicati
 - 清理 `memories_1.sqlite` 中 `memory_stage1` 的 `error/running` 行 + `UPDATE stage1_outputs SET selected_for_phase2=1` + `finalize_phase2.py` 重建 `raw_memories.md`（45/45 已选，`memory_consolidate_global done`），并将 13 个超大 `rollout-*.jsonl`（3~19MB）移至 `/tmp/codex_mem_backup_<ts>/failed_rollouts/`。
 - 重启后验证：`diagnose.py` 应 `memory_stage1 done 49 / error 0 / running 0`，`stage1_outputs 45 rows, 45 selected`。
 
-长期保险：模板 `resources/templates/config.toml` 已同步加 `max_rollouts_per_startup = 2`，安装器默认 `mimo-v2.5-go` 保持最便宜；对 `>8MB` 的 rollout 视为超上下文需手动总结或移走；`MEMORY.md 206KB` 的前缀成本固定 35k tokens/轮，欲再降需归档旧 Task Group。
+长期保险：模板 `resources/templates/config.toml` 已同步加 `max_rollouts_per_startup = 2`，安装器默认 `mimo-v2.5-free-zen` 免费 + `memories=false` 默认关闭（2026-09-01 更新，commit 8672672）；对 `>8MB` 的 rollout 视为超上下文需手动总结或移走；`MEMORY.md 206KB` 的前缀成本固定 35k tokens/轮，欲再降需归档旧 Task Group。
+
+### 26. 记忆默认关闭 + 免费模型（2026-09-01 2）
+
+处置：安装器与 `resources/templates/config.toml` 默认 `generate_memories=false, use_memories=false, disable_on_external_context=true, extract_model=mimo-v2.5-free-zen`（之前为 `mimo-v2.5-go` 付费）；存量 `~/.codex-deepseek/config.toml` 的 `patch` 逻辑在更新时自动把 `generate/use → false, disable → true, extract → free-zen`（含 `max_rollouts_per_startup=2` 补齐），用户想开再手动改回 `true`。
+
+### 27. MCP 搜索托管 + Muse 去搜对齐（2026-09-01 3）
+
+背景：`models.json` 33 个中 27 个无原生 `web_search`（`mimo×3, glm×4, kimi×3, qwen×5, hy×2, grok, longcat, minimax×2, ling, nemotron×2, big-pickle` 含两 Muse），`opencode.ai` 网关对它们 `400 missing field name`；`muse-spark-1.2-contributor-go` 曾 `true` 导致每轮 37 次 `web_search_call` + 9万 input 循环。
+处置：
+- `resources/templates/models.json:1878` `muse-spark-1.2-contributor-go` `supports_search_tool true→false` 并删 `web_search_tool_type`，与 `free-zen` 对齐，现 `✓ 有搜 6 个`（`deepseek×4 + vision×2 + gpt-5.6-luna-go`），`✗ 无搜 27 个`。
+- 新增 `resources/mcp/websearch-server.py`（7.8K，`https://mcp.exa.ai/mcp / https://search.parallel.ai/mcp`，`OPENCODE_WEBSEARCH_PROVIDER` 切换，25s，`parallelAuthHeaders`，`checksum(sessionID)%2` 分流，`contextMaxCharacters 10000`），`opencode hosted MCP` 免 key，直调 `tool: web_search / web_search_exa`。
+- `codex-oneclick-setup.command:7` 新增 MCP 注入：`mkdir -p ~/.config/opencode/mcp && cp websearch-server.py && mcp_servers.websearch` 写入 `~/.codex-deepseek/config.toml`（仿 `ocr-server.py`），重启副本生效，`deepseek/luna` 仍走原生，`mimo/glm/.../muse×2` 走 `websearch`。
+验证：`python3 -u websearch-server.py` `tools/list` 2 工具；`websearch("AI news 2026", numResults=2) → [parallel] 8 条` 已通（2026-09-01）。
+教训：`mcp_servers` 是全局的，`proxy` 无法按模型过滤，只能靠 `supports_search_tool` + 描述约束“26 个用 websearch，6 个用原生”；未来新增无搜模型默认 `false` + 进 `✗` 27 即可。

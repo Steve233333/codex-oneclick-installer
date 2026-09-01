@@ -513,11 +513,33 @@ chmod 600 "$CODEX_HOME/config.toml"
 log "config.toml 已生成（默认模型 $DEFAULT_MODEL，记忆模型 $EXTRACT_MODEL，base_url $BASE_URL，记忆默认关闭）"
 
 # ---------------------------------------------------------------------------
-# 7. AGENTS.md 全局规则
+# 7. AGENTS.md 全局规则 + MCP 搜索（opencode hosted, 仅 27 个无搜模型用）
 # ---------------------------------------------------------------------------
 cp -p "$SCRIPT_DIR/resources/templates/AGENTS.md" "$CODEX_HOME/AGENTS.md"
 cp -p "$SCRIPT_DIR/resources/templates/AGENTS.md" "$HOME/.codex/AGENTS.md"
 log "AGENTS.md 已安装"
+# websearch MCP (Exa/Parallel hosted, no API key, 25s)
+MCP_DIR="$HOME/.config/opencode/mcp"
+MCP_SRC="$SCRIPT_DIR/resources/mcp/websearch-server.py"
+MCP_DST="$MCP_DIR/websearch-server.py"
+if [[ -f "$MCP_SRC" ]]; then
+  mkdir -p "$MCP_DIR"
+  cp -p "$MCP_SRC" "$MCP_DST"
+  chmod +x "$MCP_DST"
+  python3 -m py_compile "$MCP_DST" 2>/dev/null || true
+  # 注入到副本 config.toml (mcp_servers.websearch)
+  if ! grep -q "mcp_servers.websearch" "$CODEX_HOME/config.toml" 2>/dev/null; then
+    cat >> "$CODEX_HOME/config.toml" <<MCP_EOF
+
+[mcp_servers.websearch]
+command = "python3"
+args = ["-u", "$MCP_DST"]
+MCP_EOF
+    log "MCP 搜索已注入 (websearch → $MCP_DST, 27 个无搜模型用)"
+  else
+    log "MCP 搜索已存在，跳过注入"
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # 8. 视觉代理（有 Go 或 GLM 时安装）
