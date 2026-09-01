@@ -28,3 +28,4 @@ consolidation_model = "__CONSOLIDATION_MODEL__"
 min_rate_limit_remaining_percent = 0
 min_rollout_idle_hours = 1
 disable_on_external_context = false
+max_rollouts_per_startup = 2
