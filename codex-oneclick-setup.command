@@ -715,6 +715,36 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 9b. 超大对话自动归档（>8MB 防重试，skill §25）
+# ---------------------------------------------------------------------------
+ARCHIVE_SCRIPT="$CODEX_HOME/scripts/archive-large-rollouts.sh"
+mkdir -p "$CODEX_HOME/scripts" "$CODEX_HOME/failed_rollouts"
+if [ -f "$SCRIPT_DIR/resources/scripts/archive-large-rollouts.sh" ]; then
+  cp -p "$SCRIPT_DIR/resources/scripts/archive-large-rollouts.sh" "$ARCHIVE_SCRIPT"
+  chmod +x "$ARCHIVE_SCRIPT"
+  # 立即归档一次历史超大文件
+  bash "$ARCHIVE_SCRIPT" 2>/dev/null || true
+fi
+ARCHIVE_PLIST="$HOME/Library/LaunchAgents/com.steve233.codex-archive-rollouts.plist"
+cat > "$ARCHIVE_PLIST" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.steve233.codex-archive-rollouts</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$ARCHIVE_SCRIPT</string></array>
+  <key>StartInterval</key><integer>3600</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$CODEX_HOME/failed_rollouts/archive.log</string>
+  <key>StandardErrorPath</key><string>$CODEX_HOME/failed_rollouts/archive.log</string>
+</dict>
+</plist>
+PLISTEOF
+launchctl bootout "gui/$(id -u)" "$ARCHIVE_PLIST" 2>/dev/null || launchctl unload "$ARCHIVE_PLIST" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$ARCHIVE_PLIST" 2>/dev/null || launchctl load "$ARCHIVE_PLIST" 2>/dev/null || true
+log "超大对话自动归档已安装（>8MB → failed_rollouts/，1h/次）"
+
+# ---------------------------------------------------------------------------
 # 10. 汇总
 # ---------------------------------------------------------------------------
 if [[ "$HAS_GLM" -eq 1 ]]; then
