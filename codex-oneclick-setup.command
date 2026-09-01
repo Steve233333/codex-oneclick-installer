@@ -446,7 +446,11 @@ else
 fi
 
 EXTRACT_MODEL=""
-if [[ "$AVAIL_SLUGS" == *"mimo-v2.5-go"* ]]; then
+if [[ "$AVAIL_SLUGS" == *"mimo-v2.5-free-zen"* ]]; then
+  EXTRACT_MODEL="mimo-v2.5-free-zen"
+elif [[ "$AVAIL_SLUGS" == *"mimo-v2.5-free"* ]]; then
+  EXTRACT_MODEL="mimo-v2.5-free"
+elif [[ "$AVAIL_SLUGS" == *"mimo-v2.5-go"* ]]; then
   EXTRACT_MODEL="mimo-v2.5-go"
 elif [[ "$AVAIL_SLUGS" == *"deepseek-v4-flash-vision-exp-go"* ]]; then
   EXTRACT_MODEL="deepseek-v4-flash-vision-exp-go"
@@ -487,6 +491,13 @@ if os.path.exists(dst) and open(dst).read().strip():
     out = re.sub(r"experimental_bearer_token\s*=.*", f'experimental_bearer_token = "{bearer}"', out)
     out = re.sub(r"extract_model\s*=.*", f'extract_model = "{extract_model}"', out)
     out = re.sub(r"consolidation_model\s*=.*", f'consolidation_model = "{extract_model}"', out)
+    # 默认关闭记忆以省 token，用户可在 config.toml 手动改回 true
+    out = re.sub(r"^generate_memories\s*=.*", 'generate_memories = false', out, flags=re.MULTILINE)
+    out = re.sub(r"^use_memories\s*=.*", 'use_memories = false', out, flags=re.MULTILINE)
+    out = re.sub(r"^disable_on_external_context\s*=.*", 'disable_on_external_context = true', out, flags=re.MULTILINE)
+    out = re.sub(r"^\[features\]\s*\nmemories\s*=.*", '[features]\nmemories = false', out, flags=re.MULTILINE)
+    if 'max_rollouts_per_startup' not in out:
+        out = re.sub(r"^(disable_on_external_context\s*=.*)", r"\1\nmax_rollouts_per_startup = 2", out, flags=re.MULTILINE)
     open(dst, "w").write(out)
 else:
     text = open(src).read()
@@ -499,7 +510,7 @@ else:
     open(dst, "w").write(text)
 PY
 chmod 600 "$CODEX_HOME/config.toml"
-log "config.toml 已生成（默认模型 $DEFAULT_MODEL，base_url $BASE_URL）"
+log "config.toml 已生成（默认模型 $DEFAULT_MODEL，记忆模型 $EXTRACT_MODEL，base_url $BASE_URL，记忆默认关闭）"
 
 # ---------------------------------------------------------------------------
 # 7. AGENTS.md 全局规则

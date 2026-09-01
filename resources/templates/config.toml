@@ -11,7 +11,7 @@ localeOverride = "zh-CN"
 defaultTerminalLocation = "bottom"
 
 [features]
-memories = true
+memories = false
 js_repl = false
 
 [model_providers.deepseek]
@@ -21,11 +21,11 @@ wire_api = "responses"
 experimental_bearer_token = "__BEARER__"
 
 [memories]
-generate_memories = true
-use_memories = true
+generate_memories = false
+use_memories = false
 extract_model = "__EXTRACT_MODEL__"
 consolidation_model = "__CONSOLIDATION_MODEL__"
 min_rate_limit_remaining_percent = 0
 min_rollout_idle_hours = 1
-disable_on_external_context = false
+disable_on_external_context = true
 max_rollouts_per_startup = 2
