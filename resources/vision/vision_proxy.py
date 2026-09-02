@@ -948,15 +948,14 @@ def _intercept_unsupported_history(parsed, model):
 
 
 def _sanitize_input_ids(parsed):
-    """Fix Go gateway 400 for Luna/Muse (Go-wide but effectively Luna/Muse only).
+    """Fix Zen/Go gateway 400 for store=false reasoning expiry.
 
     Codex can emit rs_ IDs joined with ':' (e.g. 'rs_aaa:rs_bbb') when reasoning
-    summaries are replayed. OpenAI accepts it; opencode.ai Go gateway validates
-    id as ^[a-zA-Z0-9_-]+$ and rejects ':' with 400. Sanitizing ':' -> '_' then
-    triggers either 'Item not found (store=false)' or 'encrypted_content could
-    not be verified' (encrypted payload is bound to original id). The safest
-    fix is to drop the entire input item. Only Luna/Muse produce ':' IDs, so
-    for Go this is effectively Luna/Muse-only (DeepSeek/mimo/glm unaffected).
+    summaries are replayed. OpenAI accepts it; opencode.ai Go/Zen gateway validates
+    id as ^[a-zA-Z0-9_-]+$ and rejects ':' with 400, or with 'Referenced reasoning
+    item ... was not found or has expired' when the encrypted reasoning item has
+    expired (store=false). The safest fix is to drop the entire input item.
+    Previously Go-only; 2026-09-02 expanded to Zen (muse-spark-free-zen same 400).
     Losing one reasoning history item is negligible vs 400.
     """
     input_items = parsed.get("input")
@@ -974,7 +973,7 @@ def _sanitize_input_ids(parsed):
     ]
     if len(filtered) != orig_len:
         parsed["input"] = filtered
-        _log(f"[vision-proxy] dropped {orig_len - len(filtered)} input item(s) with ':' or rs_ prefix in id for Go Luna/Muse store=false 400")
+        _log(f"[vision-proxy] dropped {orig_len - len(filtered)} input item(s) with ':' or rs_ prefix in id for Zen/Go store=false 400")
         return True
     return False
 
@@ -2152,9 +2151,9 @@ class Proxy:
                 wsc_changed = (zen_changed or go_changed) and _normalize_web_search_call(parsed)
                 ac_changed = (zen_changed or go_changed) and _normalize_assistant_content(parsed)
                 fca_changed = (zen_changed or go_changed) and _normalize_fc_args_history(parsed)
-                id_changed = go_changed and _sanitize_input_ids(parsed)
+                id_changed = (zen_changed or go_changed) and _sanitize_input_ids(parsed)
                 req_changed = (zen_changed or go_changed) and _fix_tool_required(parsed)
-                prune_changed = go_changed and _prune_old_images(parsed, keep_last=3)
+                prune_changed = (zen_changed or go_changed) and _prune_old_images(parsed, keep_last=3)
                 # reasoning clamp: generic high fallback, hand-written registry, zero probe
                 reasoning_changed = False
                 if isinstance(parsed, dict) and isinstance(parsed.get("reasoning"), dict):
