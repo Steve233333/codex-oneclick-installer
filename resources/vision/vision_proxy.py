@@ -867,6 +867,51 @@ def _repair_json_object_args(s):
     return s
 
 
+def _coerce_float_ints_in_args_str(s: str) -> str:
+    """Coerce float-valued integers in tool call arguments to ints.
+
+    2026-09-02: Codex's exec_command schema expects `max_output_tokens: usize` but
+    Muse Spark (and other models via Go/Zen) emit `8000.0` (float). Rust's
+    serde rejects `float` for `usize` with `invalid type: floating point 8000.0`.
+    This fixes the downstream SSE frame before it reaches Codex's executor.
+    Recursively walks dicts/lists and converts any float where is_integer().
+    Fail-safe: returns original string on any parse/serialize error.
+    """
+    if not isinstance(s, str) or not s:
+        return s
+    # quick check to avoid JSON parse on non-float payloads
+    if ".0" not in s:
+        return s
+    try:
+        obj = json.loads(s)
+    except Exception:
+        return s
+    changed = False
+    def walk(o):
+        nonlocal changed
+        if isinstance(o, dict):
+            for k, v in list(o.items()):
+                if isinstance(v, float) and v.is_integer():
+                    o[k] = int(v)
+                    changed = True
+                elif isinstance(v, (dict, list)):
+                    walk(v)
+        elif isinstance(o, list):
+            for i, v in enumerate(o):
+                if isinstance(v, float) and v.is_integer():
+                    o[i] = int(v)
+                    changed = True
+                elif isinstance(v, (dict, list)):
+                    walk(v)
+    walk(obj)
+    if not changed:
+        return s
+    try:
+        return json.dumps(obj, ensure_ascii=False)
+    except Exception:
+        return s
+
+
 def _fc_args_broken(args):
     if not isinstance(args, str) or args == "":
         return False
@@ -1602,6 +1647,14 @@ def _rewrite_apply_patch_response_json(body):
                 item.pop("arguments", None)
                 item.setdefault("status", "completed")
                 changed = True
+            elif isinstance(item, dict) and item.get("type") == "function_call":
+                # generic float->int fix for non-apply_patch (exec_command 8000.0)
+                args = item.get("arguments")
+                if isinstance(args, str):
+                    fixed = _coerce_float_ints_in_args_str(args)
+                    if fixed != args:
+                        item["arguments"] = fixed
+                        changed = True
         if not changed:
             return body
         return json.dumps(parsed, ensure_ascii=False).encode()
@@ -1749,13 +1802,22 @@ def _rewrite_sse_frame(frame, state):
 
         if etype == "response.function_call_arguments.done":
             item_id = payload.get("item_id")
-            entry = pending.pop(item_id, None)
+            entry = pending.get(item_id)
             if entry is not None:
+                entry = pending.pop(item_id, None)
                 arguments = payload.get("arguments")
                 if isinstance(arguments, str):
                     entry["args_acc"] = arguments
                 flushed.add(item_id)
                 return _flush_apply_patch(entry, interrupted=False)
+            # generic fix for non-apply_patch tools (e.g. exec_command 8000.0 -> 8000)
+            args = payload.get("arguments")
+            if isinstance(args, str):
+                fixed = _coerce_float_ints_in_args_str(args)
+                if fixed != args:
+                    payload["arguments"] = fixed
+                    _log(f"[vision-proxy] coerced float->int in {etype} item_id={item_id}")
+                    return [_sse_event(etype, payload)]
             return [frame]
 
         if etype == "response.output_item.done":
@@ -1782,6 +1844,18 @@ def _rewrite_sse_frame(frame, state):
                         entry["args_acc"] = arguments
                 flushed.add(item_id)
                 return _flush_apply_patch(entry, interrupted=interrupted)
+            # generic float->int fix for any function_call output_item.done (exec_command etc.)
+            if item.get("type") == "function_call":
+                args = item.get("arguments")
+                if isinstance(args, str):
+                    fixed = _coerce_float_ints_in_args_str(args)
+                    if fixed != args:
+                        new_item = dict(item)
+                        new_item["arguments"] = fixed
+                        new_payload = dict(payload)
+                        new_payload["item"] = new_item
+                        _log(f"[vision-proxy] coerced float->int in output_item.done name={name}")
+                        return [_sse_event(etype, new_payload)]
             return [frame]
 
         return [frame]
