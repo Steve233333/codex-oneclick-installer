@@ -980,13 +980,14 @@ def _sanitize_input_ids(parsed):
 
 
 def _fix_tool_required(parsed):
-    """Fix Go gateway 400 for Luna/Muse: ensure required includes 'limit'.
+    """Fix Zen/Go gateway 400 for strict JSON-schema validation.
 
-    Luna/Muse via Go run strict JSON-schema validation: if a tool's
-    parameters.properties contains 'limit', 'required' must be an array that
-    includes 'limit'. Codex emits the tool with properties={limit:{...}} but
-    required=[] (or missing), which DeepSeek tolerates but Luna/Muse reject
-    with 400 'Missing limit'. Patch the schema in-place for zen/go routes.
+    OpenAI strict mode requires every key in `properties` to appear in
+    `required` (and `additionalProperties: false`). Codex emits built-in tools
+    like `list_threads` with `properties:{limit:{...}}` but `required:[]` or
+    missing, which DeepSeek tolerates but Luna/Muse (and Zen free models via
+    Go/Zen gateway) reject with 400 'Missing limit'. Patch the schema in-place
+    for zen/go routes. Generalized: cover all properties, not just `limit`.
     """
     tools = parsed.get("tools")
     if not isinstance(tools, list):
@@ -1003,17 +1004,23 @@ def _fix_tool_required(parsed):
             if not isinstance(params, dict):
                 continue
             props = params.get("properties")
-            if not isinstance(props, dict) or "limit" not in props:
+            if not isinstance(props, dict) or not props:
                 continue
+            # strict requires required == all property keys
+            all_keys = list(props.keys())
             req = params.get("required")
             if not isinstance(req, list):
-                params["required"] = list(props.keys())
+                params["required"] = all_keys
                 changed = True
-            elif "limit" not in req:
-                req.append("limit")
-                changed = True
+            else:
+                # add any missing keys, keep original order + append missing
+                missing = [k for k in all_keys if k not in req]
+                if missing:
+                    req.extend(missing)
+                    changed = True
+                # also handle case where required has extra keys not in properties? keep as-is
     if changed:
-        _log("[vision-proxy] patched tool required[] to include 'limit' for Luna/Muse Go 400")
+        _log("[vision-proxy] patched tool required[] to include all properties for Zen/Go strict 400")
     return changed
 
 
@@ -2146,7 +2153,7 @@ class Proxy:
                 ac_changed = (zen_changed or go_changed) and _normalize_assistant_content(parsed)
                 fca_changed = (zen_changed or go_changed) and _normalize_fc_args_history(parsed)
                 id_changed = go_changed and _sanitize_input_ids(parsed)
-                req_changed = go_changed and _fix_tool_required(parsed)
+                req_changed = (zen_changed or go_changed) and _fix_tool_required(parsed)
                 prune_changed = go_changed and _prune_old_images(parsed, keep_last=3)
                 # reasoning clamp: generic high fallback, hand-written registry, zero probe
                 reasoning_changed = False
